@@ -1,6 +1,14 @@
-"""快速验证 config / context / prompt 模块是否正常。"""
+"""
+prompt/test_loader.py — config / context / prompt 三层自检脚本
+
+验证基建模块能否正常加载，不依赖数据库和 LLM。
+运行：python prompt/test_loader.py（已内置 sys.path 修复）
+"""
+
 import sys
 from pathlib import Path
+
+# 将项目根目录加入 Python 搜索路径
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.settings import get_settings
@@ -15,6 +23,7 @@ from prompt.loader import SUB_AGENT_KEYS, get_main_agent_prompt, get_sub_agents_
 
 
 def test_settings():
+    """验证 .env 能否被 Settings 正确读取。"""
     s = get_settings()
     assert s.mysql_database == "xiaoneng_db"
     assert s.openai_model
@@ -22,6 +31,7 @@ def test_settings():
 
 
 def test_context_isolation():
+    """验证 ContextVar set/get/reset 是否正常。"""
     tokens_a = setup_request_context("/tmp/session_a", "thread-a")
     assert get_session_context() == "/tmp/session_a"
     assert get_thread_context() == "thread-a"
@@ -32,6 +42,7 @@ def test_context_isolation():
 
 
 def test_prompts():
+    """验证 prompts.yml 结构及 5 个子 Agent 是否齐全。"""
     content = load_prompts()
     main = get_main_agent_prompt()
     subs = get_sub_agents_prompt()

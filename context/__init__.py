@@ -1,3 +1,11 @@
+"""
+context 包 — 协程级请求上下文（ContextVar）。
+
+详见 context/session.py。
+工具层通过 get_session_context() 获取工作目录；
+API 层在 run_deep_agent 入口 setup，finally 中 reset。
+"""
+
 from context.session import (
     get_session_context,
     get_thread_context,
