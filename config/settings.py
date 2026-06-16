@@ -24,6 +24,8 @@ from typing import List
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+
 
 class Settings(BaseSettings):
     """
@@ -32,7 +34,7 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",           # 启动时读取项目根目录 .env
+        env_file=str(_ENV_FILE),   # 固定读项目根目录 .env，不依赖启动 cwd
         env_file_encoding="utf-8",
         extra="ignore",
     )
