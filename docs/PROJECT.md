@@ -154,11 +154,11 @@ flowchart TB
 ### MVP（P0）
 
 - [x] 项目描述与架构定义（本文档）
-- [ ] 主 Agent + 5 子 Agent（规范知识助手可先 stub）
-- [ ] MySQL 只读查询 + Tavily + 文件上传
-- [ ] 周报 / 复盘 Markdown 生成
-- [ ] FastAPI REST + WebSocket + 任务状态查询
-- [ ] SQL 安全校验 + 结构化日志 + trace_id
+- [x] 主 Agent + 5 子 Agent（规范知识助手可先 stub）
+- [x] MySQL 只读查询 + Tavily + 文件上传
+- [x] 周报 / 复盘 Markdown 生成
+- [x] FastAPI REST + WebSocket + 任务状态查询
+- [x] SQL 安全校验 + 结构化日志 + trace_id
 
 ### V2
 

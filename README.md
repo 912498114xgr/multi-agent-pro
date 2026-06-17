@@ -67,10 +67,30 @@ flowchart TB
 ## 项目文档
 
 - 详细设计见 [docs/PROJECT.md](docs/PROJECT.md)
+- **Phase 5 新增模块学习指南**（推荐）：[docs/Phase5-新增模块学习指南.md](docs/Phase5-新增模块学习指南.md)
+- 分模块说明：[docs/modules/README.md](docs/modules/README.md)
+
+## 学习代码（自学导师 Skill · 通用）
+
+不想「AI 生成能跑但看不懂的代码」时，在对话里使用：
+
+```
+@learn-before-implement 讲 api/server.py
+@learn-before-implement 讲这个文件的任务提交流程
+```
+
+需要更细时再说：`逐行讲 _start_task`。
+
+**Skill 为通用模板**，适用于任意仓库；本仓库额外补充见 `.cursor/skills/learn-before-implement/project-overlay.md`。
+
+**默认讲解风格**：30 秒总图 → **模块级 + 方法级**（职责、调用链、关键代码、设计点）→ 串联图 + 面试三句话。
+
+Skill 位置：
+
+- 个人全局（推荐）：`~/.cursor/skills/learn-before-implement/`
+- 本仓库 overlay：`.cursor/skills/learn-before-implement/project-overlay.md`
 
 ## 本地启动
-
-> 业务代码实现中，启动步骤将在 Phase 4~5 完成后补充。
 
 ```bash
 # 1. 安装依赖
@@ -79,9 +99,30 @@ pip install -r requirements.txt
 # 2. 配置环境变量（参考 .env.example）
 cp .env.example .env
 
-# 3. 启动服务（待实现）
-uvicorn api.server:app --reload
+# 3. CLI 试跑主 Agent
+.\.venv\Scripts\python.exe agent\test_run.py "查 Sprint-12 开放缺陷"
+
+# 4. 启动 API 服务
+uvicorn api.server:app --reload --host 0.0.0.0 --port 8000
 ```
+
+### API 快速验证
+
+```bash
+# 健康检查（无需 API Key）
+curl http://localhost:8000/health
+
+# 提交任务（需 X-API-Key，默认见 .env 中 API_KEY）
+curl -X POST http://localhost:8000/api/tasks \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: dev-api-key" \
+  -d "{\"query\": \"查 Sprint-12 开放缺陷\"}"
+
+# 查询任务状态
+curl http://localhost:8000/api/tasks/{thread_id} -H "X-API-Key: dev-api-key"
+```
+
+调试模式：在 `.env` 中设置 `RUNNER_DEBUG=1` 可打印 astream 全量 chunk。
 
 ## 目录规划（目标结构）
 

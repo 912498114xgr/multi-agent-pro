@@ -2,6 +2,8 @@ import asyncio
 import datetime
 from typing import Any, Dict, Optional
 
+from fastapi import WebSocket
+
 from context.session import get_thread_context
 
 
@@ -51,7 +53,7 @@ class ToolMonitor:
             except Exception as e:
                 print(f"[Monitor] WebSocket send failed: {e}")
 
-        print(f"[Monitor:{event_type}] {message}")
+        print(f"\n[Monitor:{event_type}] {message}")
 
     def report_tool(self, tool_name: str, args: Dict[str, Any] = None) -> None:
         self._emit("tool_start", f"开始执行工具: {tool_name}", {"tool_name": tool_name, "args": args})
@@ -70,3 +72,34 @@ class ToolMonitor:
 
 
 monitor = ToolMonitor()
+
+
+class ConnectionManager:
+    """WebSocket 连接管理：按 thread_id 定向推送 monitor 事件。"""
+
+    def __init__(self) -> None:
+        self.active_connections: Dict[str, WebSocket] = {}
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.loop = loop
+        monitor.set_websocket_manager(self)
+        print(f"[Monitor] ConnectionManager bound to loop: {id(self.loop)}")
+
+    async def connect(self, websocket: WebSocket, thread_id: str) -> None:
+        await websocket.accept()
+        self.active_connections[thread_id] = websocket
+        print(f"[Monitor] Client connected: {thread_id}")
+
+    def disconnect(self, websocket: WebSocket, thread_id: str) -> None:
+        if self.active_connections.get(thread_id) is websocket:
+            del self.active_connections[thread_id]
+        print(f"[Monitor] Client disconnected: {thread_id}")
+
+    async def send_to_thread(self, message: dict, thread_id: str) -> None:
+        websocket = self.active_connections.get(thread_id)
+        if websocket:
+            await websocket.send_json(message)
+
+
+manager = ConnectionManager()

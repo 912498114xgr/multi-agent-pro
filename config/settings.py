@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"   # .env 中对应 OPENAI_MODEL，如 GLM-5
+    openai_timeout_sec: int = 120       # LLM HTTP 超时（秒）
+
+    # ---------- 调试 ----------
+    runner_debug: bool = False          # RUNNER_DEBUG=1 时打印 astream 全量 chunk
 
     # ---------- 外部数据源 ----------
     tavily_api_key: str = ""            # 行业检索助手
