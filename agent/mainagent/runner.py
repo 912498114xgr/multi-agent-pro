@@ -79,32 +79,50 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
         task_query: 用户自然语言任务
         session_id: 会话 / thread_id，用于 checkpoint 与目录隔离
     """
-    print(f"当前会话的main_agent开始执行了！ 会话id:{session_id}")
+    print(f"task_query: {task_query}")
+    print(f"session_id: {session_id}")
 
-    _, session_dir_str, relative_dir, upload_prompt, _ = _prepare_session(session_id)
+    session_dir, session_dir_str, relative_dir, upload_prompt, uploaded_files = _prepare_session(session_id)
+    print(f"session_dir: {session_dir}")
+    print(f"session_dir_str: {session_dir_str}")
+    print(f"relative_dir: {relative_dir}")
+    print(f"upload_prompt: {upload_prompt!r}")
+    print(f"uploaded_files: {uploaded_files}")
+
     tokens = setup_request_context(session_dir_str, session_id)
+    print(f"tokens: {tokens}")
 
     monitor.report_session_dir(session_dir_str)
 
     config = {"configurable": {"thread_id": session_id}}
+    print(f"config: {config}")
+
     path_instruction = _build_path_instruction(relative_dir, upload_prompt)
     print(f"path_instruction: {path_instruction}")
+
+    user_content = task_query + path_instruction
+    print(f"user_content: {user_content}")
+
+    input_messages = {"messages": [{"role": "user", "content": user_content}]}
+    print(f"input_messages: {input_messages}")
+
     try:
-        async for chunk in main_agent.astream(
-            {"messages": [{"role": "user", "content": task_query + path_instruction}]},
-            config=config,
-        ):
+        async for chunk in main_agent.astream(input_messages, config=config):
+            print(f"chunk: {chunk}")
             for node_name, state in chunk.items():
                 print(f"node_name: {node_name}")
                 print(f"state: {state}")
                 if not state or "messages" not in state:
                     continue
                 messages = state["messages"]
+                print(f"messages_count: {len(messages) if isinstance(messages, list) else 'N/A'}")
                 if messages and isinstance(messages, list):
                     last_msg = messages[-1]
+                    print(f"last_msg_type: {type(last_msg).__name__}")
                     print(f"last_msg: {last_msg}")
                     if node_name == "model":
                         if last_msg.tool_calls:
+                            print(f"tool_calls: {last_msg.tool_calls}")
                             for tool_call in last_msg.tool_calls:
                                 name = (
                                     tool_call.get("name")
@@ -116,6 +134,8 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
                                     if isinstance(tool_call, dict)
                                     else getattr(tool_call, "args", None) or {}
                                 )
+                                print(f"tool_call_name: {name}")
+                                print(f"tool_call_args: {args}")
                                 if name == "task":
                                     monitor.report_assistant(
                                         args.get("subagent_type", ""),
@@ -126,9 +146,14 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
                             preview = content[:100] if isinstance(content, str) else str(content)[:100]
                             print(f"主智能体执行结果，最终结果：{preview}")
                             monitor.report_task_result(content)
+                    elif node_name == "tools":
+                        print(f"tool_result_name: {getattr(last_msg, 'name', None)}")
+                        print(f"tool_result_content_preview: {str(getattr(last_msg, 'content', ''))[:200]}")
 
     except Exception as e:
+        print(f"exception: {e!r}")
         monitor._emit("error", f"执行主 Agent 异常: {str(e)}")
         raise
     finally:
+        print(f"reset_all_tokens: {tokens}")
         reset_all_tokens(tokens)
