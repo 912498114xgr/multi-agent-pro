@@ -41,7 +41,7 @@ class Settings(BaseSettings):
 
     # ---------- API 层（Phase 5 使用）----------
     api_key: str = "dev-api-key"   # 请求头 X-API-Key 校验
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"  # 逗号分隔
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
 
     # ---------- LLM 大模型 ----------
     # 兼容 OpenAI 协议的中转（如 edgefn、dashscope compatible-mode）

@@ -106,6 +106,20 @@ cp .env.example .env
 uvicorn api.server:app --reload --host 0.0.0.0 --port 8000
 ```
 
+### Web 前端（MVP）
+
+Vue 前端在同级目录 `../data-agent-fronted/data-agent-fronted`，完整联调步骤见该目录 **[DEPLOYMENT.md](../data-agent-fronted/data-agent-fronted/DEPLOYMENT.md)**。
+
+```bash
+# 另开终端
+cd ../data-agent-fronted/data-agent-fronted
+npm install
+npm run dev
+# 浏览器打开 http://localhost:5173
+```
+
+确保前后端 `API_KEY` / `VITE_API_KEY` 一致（默认 `dev-api-key`）。
+
 ### API 快速验证
 
 ```bash
