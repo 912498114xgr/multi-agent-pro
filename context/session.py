@@ -29,6 +29,7 @@ _session_dir_ctx: ContextVar[Optional[str]] = ContextVar("session_dir", default=
 _thread_id_ctx: ContextVar[Optional[str]] = ContextVar("thread_id", default=None)
 _trace_id_ctx: ContextVar[Optional[str]] = ContextVar("trace_id", default=None)
 _user_id_ctx: ContextVar[Optional[str]] = ContextVar("user_id", default=None)
+_active_assistant_ctx: ContextVar[Optional[str]] = ContextVar("active_assistant", default=None)
 
 
 def set_session_context(path: str):
@@ -68,6 +69,24 @@ def set_user_context(user_id: str):
 
 def get_user_id() -> Optional[str]:
     return _user_id_ctx.get()
+
+
+def set_active_assistant(name: str):
+    """主 Agent 委派子 Agent 时记录名称，供 assistant_done 使用。"""
+    return _active_assistant_ctx.set(name)
+
+
+def get_active_assistant() -> Optional[str]:
+    return _active_assistant_ctx.get()
+
+
+def reset_active_assistant(token) -> None:
+    if token is not None:
+        _active_assistant_ctx.reset(token)
+
+
+def clear_active_assistant() -> None:
+    _active_assistant_ctx.set(None)
 
 
 def reset_session_context(

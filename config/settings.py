@@ -50,9 +50,6 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"   # .env 中对应 OPENAI_MODEL，如 GLM-5
     openai_timeout_sec: int = 120       # LLM HTTP 超时（秒）
 
-    # ---------- 调试 ----------
-    runner_debug: bool = False          # RUNNER_DEBUG=1 时打印 astream 全量 chunk
-
     # ---------- 外部数据源 ----------
     tavily_api_key: str = ""            # 行业检索助手
     mysql_host: str = "localhost"
@@ -65,6 +62,13 @@ class Settings(BaseSettings):
     mysql_sql_mode: str = "TRADITIONAL"
     ragflow_api_url: str = ""           # 规范知识助手（MVP 可留空）
     ragflow_api_key: str = ""
+
+    # ---------- Redis（checkpoint + 任务状态持久化）----------
+    redis_url: str = ""                 # 例: redis://localhost:6379/0；空则内存模式
+    redis_checkpoint_ttl_sec: int = 86400  # checkpoint TTL（秒），0 表示不过期
+
+    # ---------- 调试 ----------
+    runner_debug: bool = False          # RUNNER_DEBUG=1 时打印 astream 全量 chunk
 
     # ---------- 业务限制 ----------
     max_upload_mb: int = 20             # 上传文件大小上限
@@ -95,6 +99,11 @@ class Settings(BaseSettings):
     def max_upload_bytes(self) -> int:
         """上传大小上限（字节），api/server 校验用。"""
         return self.max_upload_mb * 1024 * 1024
+
+    @property
+    def use_redis_task_store(self) -> bool:
+        """配置 REDIS_URL 时任务状态写入 Redis，支持崩溃恢复。"""
+        return bool(self.redis_url.strip())
 
     def mysql_config(self) -> dict:
         """

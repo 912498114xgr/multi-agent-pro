@@ -13,10 +13,16 @@ from typing import Any, Dict, Optional
 
 
 class ToolHooks:
-    """工具调用观察者。后续可扩展为写入 task_store 事件列表。"""
+    """工具调用观察者。子 Agent 工具执行时同步推送 WebSocket monitor 事件。"""
 
     def report_tool(self, tool_name: str, args: Optional[Dict[str, Any]] = None) -> None:
         print(f"[Tool] {tool_name} args={args or {}}")
+        try:
+            from api.monitor import monitor
+
+            monitor.report_tool(tool_name, args)
+        except Exception as exc:
+            print(f"[Tool] monitor push failed: {exc}")
 
 
 # 全项目共用的单例，工具文件 from tools.hooks import hooks

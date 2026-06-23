@@ -14,7 +14,6 @@ from typing import Annotated
 from langchain_core.tools import tool
 
 from context.session import get_session_context
-from tools.hooks import hooks
 from utils.path_utils import resolve_path
 
 # 白名单扩展名，不在列表内直接拒绝，防止读取二进制或可执行文件
@@ -33,9 +32,7 @@ def read_file_content(
         filename: 只需传文件名如「Sprint12测试报告.md」，不要带目录前缀
         instruction: 预留参数，后续可做定向摘要（当前读取全文）
     """
-    hooks.report_tool("read_file_content", {"filename": filename, "instruction": instruction})
-
-    # 从 ContextVar 取当前会话目录，再经 path_utils 安全解析
+    # 进度由 runner 在主图 model 节点上报；此处不再走 hooks，避免重复 WebSocket 事件。
     session_dir = get_session_context()
     file_path = Path(resolve_path(filename, session_dir))
 

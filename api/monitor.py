@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
 
-from context.session import get_thread_context
+from context.session import clear_active_assistant, get_active_assistant, get_thread_context, set_active_assistant
 
 
 class ToolMonitor:
@@ -59,10 +59,19 @@ class ToolMonitor:
         self._emit("tool_start", f"开始执行工具: {tool_name}", {"tool_name": tool_name, "args": args})
 
     def report_assistant(self, assistant_name: str, args: Dict[str, Any] = None) -> None:
+        set_active_assistant(assistant_name)
         self._emit("assistant_call", f"正在调用助手: {assistant_name}", {
             "assistant_name": assistant_name,
             "args": args,
         })
+
+    def report_assistant_done(self, assistant_name: Optional[str] = None) -> None:
+        name = assistant_name or get_active_assistant() or "子 Agent"
+        self._emit("assistant_done", f"子 Agent 已返回: {name}", {
+            "assistant_name": name,
+            "tool_name": "task",
+        })
+        clear_active_assistant()
 
     def report_task_result(self, result: str) -> None:
         self._emit("task_result", "任务执行完成", {"result": result})

@@ -1,3 +1,3 @@
-from agent.mainagent.runner import main_agent, run_deep_agent
+from agent.mainagent.runner import get_main_agent, run_deep_agent
 
-__all__ = ["main_agent", "run_deep_agent"]
+__all__ = ["get_main_agent", "main_agent", "run_deep_agent"]

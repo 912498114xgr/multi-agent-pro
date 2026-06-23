@@ -15,9 +15,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from agent.mainagent.runner import run_deep_agent
+from agent.checkpoint import init_checkpointer
+from agent.mainagent.runner import recover_interrupted_tasks, run_deep_agent
 from api.monitor import manager
-from api.task_store import task_store
+from api.task_store import get_task_store
 from config.settings import get_settings
 
 _settings = get_settings()
@@ -57,18 +58,24 @@ class TaskResponse(BaseModel):
 async def startup_event() -> None:
     loop = asyncio.get_running_loop()
     manager.set_loop(loop)
+    if _settings.use_redis_task_store:
+        init_checkpointer()
+        from agent.mainagent.runner import get_main_agent
+
+        get_main_agent()
+        await recover_interrupted_tasks()
 
 
-async def _run_task_background(query: str, thread_id: str) -> None:
+async def _run_task_background(query: str, thread_id: str, *, resume: bool = False) -> None:
     try:
-        await run_deep_agent(query, thread_id)
+        await run_deep_agent(query, thread_id, resume=resume)
     except Exception:
         pass
 
 
 async def _start_task(request: TaskRequest) -> TaskResponse:
     thread_id = request.thread_id or str(uuid.uuid4())
-    task_store.create(thread_id, request.query)
+    get_task_store().create(thread_id, request.query)
     asyncio.create_task(_run_task_background(request.query, thread_id))
     return TaskResponse(status="started", thread_id=thread_id)
 
@@ -86,10 +93,22 @@ async def create_task_compat(request: TaskRequest) -> TaskResponse:
 
 @app.get("/api/tasks/{thread_id}", dependencies=[Depends(verify_api_key)])
 async def get_task(thread_id: str):
-    task = task_store.get(thread_id)
+    task = get_task_store().get(thread_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
+
+
+@app.post("/api/tasks/{thread_id}/resume", dependencies=[Depends(verify_api_key)])
+async def resume_task(thread_id: str):
+    store = get_task_store()
+    task = store.get(thread_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.get("status") not in ("running", "error", "pending"):
+        raise HTTPException(status_code=400, detail="Task is not resumable")
+    asyncio.create_task(_run_task_background(task.get("query") or "", thread_id, resume=True))
+    return {"status": "resuming", "thread_id": thread_id}
 
 
 @app.post("/api/upload", dependencies=[Depends(verify_api_key)])
