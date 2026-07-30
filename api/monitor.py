@@ -22,7 +22,13 @@ class ToolMonitor:
         self.websocket_manager = manager
 
     def _emit(self, event_type: str, message: str, data: Optional[Dict[str, Any]] = None) -> None:
-        payload = {
+        payload = self._build_payload(event_type, message, data)
+        self._send_payload_to_websocket(payload)
+        print(f"\n[Monitor:{event_type}] {message}")
+
+    def _build_payload(self, event_type: str, message: str, data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """统一的前端进度事件格式。"""
+        return {
             "type": "monitor_event",
             "event": event_type,
             "message": message,
@@ -31,29 +37,42 @@ class ToolMonitor:
             "timestamp": datetime.datetime.now().isoformat(),
         }
 
-        if self.websocket_manager:
-            try:
-                thread_id = get_thread_context()
-                manager_loop = self.websocket_manager.loop
-                if manager_loop and thread_id:
-                    try:
-                        current_loop = asyncio.get_running_loop()
-                    except RuntimeError:
-                        current_loop = None
+    def _send_payload_to_websocket(self, payload: Dict[str, Any]) -> None:
+        """把进度事件投递给当前 thread_id 对应的 WebSocket。"""
+        if not self.websocket_manager:
+            return
 
-                    if current_loop and current_loop == manager_loop:
-                        current_loop.create_task(
-                            self.websocket_manager.send_to_thread(payload, thread_id)
-                        )
-                    else:
-                        asyncio.run_coroutine_threadsafe(
-                            self.websocket_manager.send_to_thread(payload, thread_id),
-                            manager_loop,
-                        )
-            except Exception as e:
-                print(f"[Monitor] WebSocket send failed: {e}")
+        thread_id = get_thread_context()
+        manager_loop = self.websocket_manager.loop
+        if not thread_id or not manager_loop:
+            return
 
-        print(f"\n[Monitor:{event_type}] {message}")
+        try:
+            self._schedule_websocket_send(payload, thread_id, manager_loop)
+        except Exception as e:
+            print(f"[Monitor] WebSocket send failed: {e}")
+
+    def _schedule_websocket_send(
+        self,
+        payload: Dict[str, Any],
+        thread_id: str,
+        manager_loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        """
+        WebSocket 发送必须交给 FastAPI 的 event loop。
+
+        同一个 loop 内直接 create_task；跨线程或无 running loop 时，用线程安全方式投递。
+        """
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        send_coro = self.websocket_manager.send_to_thread(payload, thread_id)
+        if current_loop and current_loop == manager_loop:
+            current_loop.create_task(send_coro)
+        else:
+            asyncio.run_coroutine_threadsafe(send_coro, manager_loop)
 
     def report_tool(self, tool_name: str, args: Dict[str, Any] = None) -> None:
         self._emit("tool_start", f"开始执行工具: {tool_name}", {"tool_name": tool_name, "args": args})

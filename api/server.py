@@ -60,28 +60,43 @@ async def startup_event() -> None:
 
 
 async def _run_task_background(query: str, thread_id: str) -> None:
+    """后台 Task 的入口：真正耗时的 Agent 在这里执行。"""
     try:
         await run_deep_agent(query, thread_id)
-    except Exception:
-        pass
+    except Exception as exc:
+        # run_deep_agent 内部已经 mark_error；这里兜底，避免后台 Task 异常丢失得毫无痕迹。
+        print(f"[API] Background task failed: thread_id={thread_id}, error={exc}")
 
 
-async def _start_task(request: TaskRequest) -> TaskResponse:
+def _schedule_agent_task(query: str, thread_id: str) -> None:
+    """
+    把 Agent 协程登记到当前 FastAPI event loop。
+
+    注意：这里不 await。HTTP 请求只负责“安排后台任务”，不等待 Agent 跑完。
+    """
+    asyncio.create_task(
+        _run_task_background(query, thread_id),
+        name=f"agent-task-{thread_id}",
+    )
+
+
+def _start_task(request: TaskRequest) -> TaskResponse:
+    """创建任务记录，并安排后台 Agent 执行。"""
     thread_id = request.thread_id or str(uuid.uuid4())
     task_store.create(thread_id, request.query)
-    asyncio.create_task(_run_task_background(request.query, thread_id))
+    _schedule_agent_task(request.query, thread_id)
     return TaskResponse(status="started", thread_id=thread_id)
 
 
 @app.post("/api/tasks", response_model=TaskResponse, dependencies=[Depends(verify_api_key)])
 async def create_task(request: TaskRequest) -> TaskResponse:
-    return await _start_task(request)
+    return _start_task(request)
 
 
 @app.post("/api/task", response_model=TaskResponse, dependencies=[Depends(verify_api_key)])
 async def create_task_compat(request: TaskRequest) -> TaskResponse:
     """兼容 deep_search_pro 路径。"""
-    return await _start_task(request)
+    return _start_task(request)
 
 
 @app.get("/api/tasks/{thread_id}", dependencies=[Depends(verify_api_key)])

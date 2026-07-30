@@ -99,6 +99,78 @@ def _tool_call_args(tool_call: Any) -> dict:
     return getattr(tool_call, "args", None) or {}
 
 
+
+def _extract_latest_message(node_name: str, state: Any) -> Any | None:
+    """LangGraph 每个 chunk 里有节点状态；我们只关心最新一条 message。"""
+    _dbg(f"node_name: {node_name}")
+    _dbg(f"state: {state}")
+    if not state or "messages" not in state:
+        return None
+
+    messages = state["messages"]
+    _dbg(f"messages_count: {len(messages) if isinstance(messages, list) else 'N/A'}")
+    if not messages or not isinstance(messages, list):
+        return None
+
+    latest_message = messages[-1]
+    _dbg(f"last_msg_type: {type(latest_message).__name__}")
+    _dbg(f"last_msg: {latest_message}")
+    return latest_message
+
+
+async def _consume_agent_stream(input_messages: dict[str, Any], config: dict[str, Any]) -> str | None:
+    """
+    流式执行主 Agent，并把关键分支转成 monitor 进度事件。
+
+    读这段时抓住 3 个分支：
+      1. model + tool_calls：模型准备调用子 Agent 或工具
+      2. model + content：模型产出最终答案
+      3. tools：工具返回结果，默认只在 debug 模式打印
+    """
+    final_result: str | None = None
+
+    async for chunk in main_agent.astream(input_messages, config=config):
+        _dbg(f"chunk: {chunk}")
+
+        for node_name, state in chunk.items():
+            last_msg = _extract_latest_message(node_name, state)
+            if last_msg is None:
+                continue
+
+            if node_name == "model":
+                tool_calls = getattr(last_msg, "tool_calls", None)
+                content = getattr(last_msg, "content", None)
+
+                if tool_calls:
+                    for tool_call in tool_calls:
+                        name = _tool_call_name(tool_call)
+                        args = _tool_call_args(tool_call)
+                        _dbg(f"tool_call_name: {name}", f"tool_call_args: {args}")
+                        # 子agent
+                        if name == "task":
+                            monitor.report_assistant(
+                                args.get("subagent_type", ""),
+                                {"description": args.get("description", "")},
+                            )
+                        # 工具
+                        elif name:
+                            monitor.report_tool(name, args)
+
+                elif content:
+                    final_result = content if isinstance(content, str) else str(content)
+                    preview = final_result[:100]
+                    print(f"主智能体执行结果，最终结果：{preview}")
+                    monitor.report_task_result(final_result)
+
+            elif node_name == "tools":
+                _dbg(
+                    f"tool_result_name: {getattr(last_msg, 'name', None)}",
+                    f"tool_result_content_preview: {str(getattr(last_msg, 'content', ''))[:200]}",
+                )
+
+    return final_result
+
+
 async def run_deep_agent(task_query: str, session_id: str) -> None:
     """
     异步执行主 Agent。
@@ -127,46 +199,8 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
     _dbg(f"path_instruction: {path_instruction}")
     _dbg(f"input_messages: {input_messages}")
 
-    final_result: str | None = None
-
     try:
-        async for chunk in main_agent.astream(input_messages, config=config):
-            _dbg(f"chunk: {chunk}")
-            for node_name, state in chunk.items():
-                _dbg(f"node_name: {node_name}")
-                _dbg(f"state: {state}")
-                if not state or "messages" not in state:
-                    continue
-                messages = state["messages"]
-                _dbg(f"messages_count: {len(messages) if isinstance(messages, list) else 'N/A'}")
-                if messages and isinstance(messages, list):
-                    last_msg = messages[-1]
-                    _dbg(f"last_msg_type: {type(last_msg).__name__}")
-                    _dbg(f"last_msg: {last_msg}")
-                    if node_name == "model":
-                        if last_msg.tool_calls:
-                            for tool_call in last_msg.tool_calls:
-                                name = _tool_call_name(tool_call)
-                                args = _tool_call_args(tool_call)
-                                _dbg(f"tool_call_name: {name}", f"tool_call_args: {args}")
-                                if name == "task":
-                                    monitor.report_assistant(
-                                        args.get("subagent_type", ""),
-                                        {"description": args.get("description", "")},
-                                    )
-                                elif name:
-                                    monitor.report_tool(name, args)
-                        elif last_msg.content:
-                            content = last_msg.content
-                            final_result = content if isinstance(content, str) else str(content)
-                            preview = final_result[:100]
-                            print(f"主智能体执行结果，最终结果：{preview}")
-                            monitor.report_task_result(final_result)
-                    elif node_name == "tools":
-                        _dbg(
-                            f"tool_result_name: {getattr(last_msg, 'name', None)}",
-                            f"tool_result_content_preview: {str(getattr(last_msg, 'content', ''))[:200]}",
-                        )
+        final_result = await _consume_agent_stream(input_messages, config)
 
         if final_result is not None:
             task_store.mark_done(session_id, final_result, session_dir_str)
