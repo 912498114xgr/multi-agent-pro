@@ -67,7 +67,7 @@ flowchart TB
 ## 项目文档
 
 - 详细设计见 [docs/PROJECT.md](docs/PROJECT.md)
-- **Phase 5 新增模块学习指南**（推荐）：[docs/Phase5-新增模块学习指南.md](docs/Phase5-新增模块学习指南.md)
+- **Phase 5 新增模块学习指南**（推荐）：[docs/Phase5-新增模块学习指南.md](docs/modules/Phase5-新增模块学习指南.md)
 - 分模块说明：[docs/modules/README.md](docs/modules/README.md)
 
 ## 学习代码（自学导师 Skill · 通用）

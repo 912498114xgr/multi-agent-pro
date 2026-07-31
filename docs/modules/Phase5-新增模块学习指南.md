@@ -32,7 +32,7 @@ multi-agent-pro/
 └── agent/mainagent/runner.py ← 改造：对接 task_store + 调试开关
 ```
 
-各模块详细说明见 [docs/modules/](modules/README.md)。
+各模块详细说明见 [docs/modules/](README.md)。
 
 ---
 
@@ -106,13 +106,13 @@ curl http://localhost:8000/api/tasks/{thread_id} -H "X-API-Key: dev-api-key"
 
 | 文档 | 内容 |
 |------|------|
-| [01-llm-model.md](modules/01-llm-model.md) | LLM 连接稳定化 |
-| [02-config-扩展.md](modules/02-config-扩展.md) | 新增配置项 |
-| [03-task-store.md](modules/03-task-store.md) | 任务状态存储 |
-| [04-api-server.md](modules/04-api-server.md) | FastAPI 服务 |
-| [05-monitor-websocket.md](modules/05-monitor-websocket.md) | 进度监控与 WebSocket |
-| [06-observability.md](modules/06-observability.md) | 结构化日志 |
-| [07-runner-改造.md](modules/07-runner-改造.md) | runner 如何串联以上模块 |
+| [01-llm-model.md](01-llm-model.md) | LLM 连接稳定化 |
+| [02-config-扩展.md](02-config-扩展.md) | 新增配置项 |
+| [03-task-store.md](03-task-store.md) | 任务状态存储 |
+| [04-api-server.md](04-api-server.md) | FastAPI 服务 |
+| [05-monitor-websocket.md](05-monitor-websocket.md) | 进度监控与 WebSocket |
+| [06-observability.md](06-observability.md) | 结构化日志 |
+| [07-runner-改造.md](07-runner-改造.md) | runner 如何串联以上模块 |
 
 ---
 

@@ -12,6 +12,6 @@
 | 06 | [06-observability.md](06-observability.md) | `observability/logging.py` | JSON 结构化日志 |
 | 07 | [07-runner-改造.md](07-runner-改造.md) | `agent/mainagent/runner.py` | 串联所有新增能力 |
 
-总览：[../Phase5-新增模块学习指南.md](../Phase5-新增模块学习指南.md)
+总览：[../Phase5-新增模块学习指南.md](Phase5-新增模块学习指南.md)
 
 **精读代码**：使用 `@learn-before-implement`（通用 Skill，默认方法级）；本仓库路径与分段见 [project-overlay.md](../../.cursor/skills/learn-before-implement/project-overlay.md)。
