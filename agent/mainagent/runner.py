@@ -160,8 +160,9 @@ async def _consume_agent_stream(input_messages: dict[str, Any], config: dict[str
 
                 elif content:
                     final_result = content if isinstance(content, str) else str(content)
-                    preview = final_result[:100]
-                    print(f"主智能体执行结果，最终结果：{preview}")
+                    if _settings.runner_debug:
+                        preview = final_result[:100]
+                        print(f"主智能体执行结果，最终结果：{preview}")
                     monitor.report_task_result(final_result)
 
             elif node_name == "tools":
@@ -182,7 +183,8 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
         session_id: 会话 / thread_id，用于 checkpoint 与目录隔离
     """
     _log("agent_start", task_query[:120], session_id=session_id)
-    print(f"当前会话的main_agent开始执行了！ 会话id:{session_id}")
+    if _settings.runner_debug:
+        print(f"当前会话的main_agent开始执行了！ 会话id:{session_id}")
 
     if not task_store.get(session_id):
         task_store.create(session_id, task_query)
@@ -206,8 +208,8 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
         final_result = await _consume_agent_stream(input_messages, config)
         result_text = final_result if final_result is not None else ""
         failed_steps = get_failure_steps()
-        for step in failed_steps:
-            monitor.report_step_failed(step)
+        if failed_steps:
+            monitor.report_failures_summary(failed_steps)
 
         status = decide_task_status(failed_steps)
         if status == "error":
@@ -215,9 +217,10 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
             err_msg = "; ".join(
                 f"{s.get('tool')}: {s.get('message')}" for s in failed_steps if s.get("role") == "critical"
             ) or "critical tool failed"
+            # 摘要已含明细；error 文案缩短，避免与 failures_summary 重复整段拼接
+            short = f"关键步骤失败（{sum(1 for s in failed_steps if s.get('role') == 'critical')} 项），任务终止"
             task_store.mark_error(session_id, err_msg, failed_steps=failed_steps)
-            monitor.report_degraded(failed_steps, status="error")
-            monitor._emit("error", f"关键步骤失败: {err_msg}")
+            monitor.report_error(short, failed_steps=failed_steps)
             _log("agent_error_critical_tools", err_msg, session_id=session_id)
         elif status == "partial_success":
             task_store.mark_partial_success(
@@ -236,9 +239,10 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
         log_error(_logger, "agent_error", str(e), session_id=session_id)
         failed_steps = get_failure_steps()
         task_store.mark_error(session_id, str(e), failed_steps=failed_steps or None)
-        monitor._emit("error", f"执行主 Agent 异常: {str(e)}")
+        monitor.report_error(f"执行主 Agent 异常: {e}", failed_steps=failed_steps)
         raise
     finally:
         reset_failure_steps(failure_token)
         reset_all_tokens(tokens)
-        print(f"[Runner] 结束 session_id={session_id}")
+        if _settings.runner_debug:
+            print(f"[Runner] 结束 session_id={session_id}")

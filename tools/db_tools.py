@@ -23,8 +23,17 @@ def _rows_to_csv(description, rows, suffix: str = "") -> str:
 
 
 def _audit(tool_name: str, query: str, ms: float, size: int, ok: bool) -> None:
+    """失败必打；成功仅 debug 模式打印，减少控制台噪音。"""
     status = "ok" if ok else "fail"
-    print(f"[SQL Audit] tool={tool_name} ms={ms:.1f} size={size} status={status} query={query[:120]}")
+    line = f"[SQL Audit] tool={tool_name} ms={ms:.1f} size={size} status={status} query={query[:120]}"
+    if not ok:
+        print(line)
+        return
+    try:
+        if get_settings().runner_debug:
+            print(line)
+    except Exception:
+        pass
 
 
 @tool
@@ -61,7 +70,7 @@ def list_sql_tables() -> str:
             tool="list_sql_tables",
             message=f"查询出现异常：{e}",
             error_type="upstream",
-            retryable=True,
+            retryable=False,
         )
 
 
@@ -101,7 +110,7 @@ def get_table_data(table_name: str) -> str:
             tool="get_table_data",
             message=f"查询出现异常：{e}",
             error_type="upstream",
-            retryable=True,
+            retryable=False,
         )
 
 
@@ -140,5 +149,5 @@ def execute_sql_query(query: str) -> str:
             tool="execute_sql_query",
             message=f"查询出现异常：{e}",
             error_type="upstream",
-            retryable=True,
+            retryable=False,
         )

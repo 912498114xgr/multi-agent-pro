@@ -51,8 +51,10 @@ def internet_search(
             max_results=max_results,
             include_raw_content=include_raw_content,
         )
-        print(f"[Tavily] ms={(time.perf_counter()-start)*1000:.0f} query={query[:80]}")
+        if settings.runner_debug:
+            print(f"[Tavily] ms={(time.perf_counter()-start)*1000:.0f} query={query[:80]}")
         return format_tool_ok(tool="internet_search", body=str(result))
+
     except Exception as e:
         return format_tool_error(
             tool="internet_search",

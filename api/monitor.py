@@ -1,6 +1,17 @@
+"""
+任务进度监控：CLI 打印 + WebSocket 推送。
+
+设计原则（日志降噪）：
+  - 进度事件面向用户，宁少勿滥
+  - 失败步骤合并为一条 failures_summary，不再逐条 step_failed
+  - 终态事件语义与 status 对齐，避免「执行完成」后再报错的观感
+"""
+
+from __future__ import annotations
+
 import asyncio
 import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import WebSocket
 
@@ -27,7 +38,6 @@ class ToolMonitor:
         print(f"\n[Monitor:{event_type}] {message}")
 
     def _build_payload(self, event_type: str, message: str, data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """统一的前端进度事件格式。"""
         return {
             "type": "monitor_event",
             "event": event_type,
@@ -38,7 +48,6 @@ class ToolMonitor:
         }
 
     def _send_payload_to_websocket(self, payload: Dict[str, Any]) -> None:
-        """把进度事件投递给当前 thread_id 对应的 WebSocket。"""
         if not self.websocket_manager:
             return
 
@@ -58,11 +67,6 @@ class ToolMonitor:
         thread_id: str,
         manager_loop: asyncio.AbstractEventLoop,
     ) -> None:
-        """
-        WebSocket 发送必须交给 FastAPI 的 event loop。
-
-        同一个 loop 内直接 create_task；跨线程或无 running loop 时，用线程安全方式投递。
-        """
         try:
             current_loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -75,35 +79,66 @@ class ToolMonitor:
             asyncio.run_coroutine_threadsafe(send_coro, manager_loop)
 
     def report_tool(self, tool_name: str, args: Dict[str, Any] = None) -> None:
-        self._emit("tool_start", f"开始执行工具: {tool_name}", {"tool_name": tool_name, "args": args})
+        """主 Agent 规划调用工具时（来自 astream tool_calls）。"""
+        self._emit("tool_start", f"准备调用工具: {tool_name}", {"tool_name": tool_name, "args": args or {}})
 
     def report_assistant(self, assistant_name: str, args: Dict[str, Any] = None) -> None:
         self._emit("assistant_call", f"正在调用助手: {assistant_name}", {
             "assistant_name": assistant_name,
-            "args": args,
+            "args": args or {},
         })
 
     def report_task_result(self, result: str) -> None:
-        self._emit("task_result", "任务执行完成", {"result": result})
+        """模型已产出说明性正文；真正终态由 done / partial_success / error 决定。"""
+        self._emit(
+            "task_result",
+            "模型已生成回复（等待任务终态确认）",
+            {"result": result},
+        )
 
     def report_session_dir(self, path: str) -> None:
         self._emit("session_created", f"工作目录已创建: {path}", {"path": path})
 
-    def report_step_failed(self, step: Dict[str, Any]) -> None:
-        tool = step.get("tool", "unknown")
-        role = step.get("role", "optional")
-        message = step.get("message", "")
+    def report_failures_summary(self, failed_steps: List[Dict[str, Any]]) -> None:
+        """合并失败步骤为一条进度事件，避免逐条刷屏。"""
+        if not failed_steps:
+            return
+        critical_n = sum(1 for s in failed_steps if s.get("role") == "critical")
+        optional_n = len(failed_steps) - critical_n
+        # 按 tool 去重计数，摘要更短
+        by_tool: Dict[str, int] = {}
+        for s in failed_steps:
+            name = str(s.get("tool") or "unknown")
+            by_tool[name] = by_tool.get(name, 0) + 1
+        tool_bits = ", ".join(f"{k}×{v}" if v > 1 else k for k, v in by_tool.items())
+        msg = (
+            f"工具失败汇总: 共 {len(failed_steps)} 次"
+            f"（关键 {critical_n} / 可选 {optional_n}）— {tool_bits}"
+        )
         self._emit(
-            "step_failed",
-            f"步骤失败({role}): {tool} — {message}",
-            {"step": step},
+            "failures_summary",
+            msg,
+            {
+                "failed_steps": failed_steps,
+                "critical_count": critical_n,
+                "optional_count": optional_n,
+                "by_tool": by_tool,
+            },
         )
 
     def report_degraded(self, failed_steps: list, status: str) -> None:
+        label = "部分成功" if status == "partial_success" else status
         self._emit(
             "degraded",
-            f"任务降级完成: status={status}, failed={len(failed_steps)}",
+            f"任务终态: {label}（可选能力失败已降级）",
             {"status": status, "failed_steps": failed_steps},
+        )
+
+    def report_error(self, message: str, failed_steps: Optional[List[Dict[str, Any]]] = None) -> None:
+        self._emit(
+            "error",
+            message,
+            {"failed_steps": failed_steps or []},
         )
 
 

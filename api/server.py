@@ -5,6 +5,7 @@ EfficiencyAgent FastAPI 服务：任务提交、状态查询、文件上传、We
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from pathlib import Path
 from typing import List, Optional
@@ -37,6 +38,21 @@ upload_root = _settings.upload_dir
 upload_root.mkdir(parents=True, exist_ok=True)
 
 
+class _SuppressTaskPollAccessLog(logging.Filter):
+    """前端轮询 GET /api/tasks/{id} 频率高，默认不打 access，避免刷屏。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        if "GET /api/tasks/" in msg and "HTTP" in msg:
+            # 保留明显错误码；2xx/404 探针与轮询静音
+            if " 200 " in msg or " 404 " in msg:
+                return False
+        return True
+
+
 def verify_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")) -> None:
     expected = _settings.api_key
     if expected and x_api_key != expected:
@@ -57,6 +73,7 @@ class TaskResponse(BaseModel):
 async def startup_event() -> None:
     loop = asyncio.get_running_loop()
     manager.set_loop(loop)
+    logging.getLogger("uvicorn.access").addFilter(_SuppressTaskPollAccessLog())
 
 
 async def _run_task_background(query: str, thread_id: str) -> None:
