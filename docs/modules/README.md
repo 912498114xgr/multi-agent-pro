@@ -15,8 +15,10 @@
 
 总览：[../Phase5-新增模块学习指南.md](Phase5-新增模块学习指南.md)
 
-**面试含金量两轮迭代（推荐）**：[../迭代学习索引.md](../迭代学习索引.md)
-- [R1 失败隔离](../迭代-R1-失败隔离学习指南.md)
+**面试含金量迭代（推荐）**：[../迭代学习索引.md](../迭代学习索引.md)
+- [R1 失败隔离](../迭代-R1-失败隔离学习指南.md)（含 R1b）
 - [R2 步骤 Trace](../迭代-R2-步骤级Trace学习指南.md)
+- [R3 超时与取消](../迭代-R3-超时与取消学习指南.md)
+- [后续待办 R4–R7](../面试补齐迭代待办.md)
 
 **精读代码**：使用 `@learn-before-implement`（通用 Skill，默认方法级）；本仓库路径与分段见 [project-overlay.md](../../.cursor/skills/learn-before-implement/project-overlay.md)。

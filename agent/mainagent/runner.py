@@ -8,6 +8,7 @@ EfficiencyAgent 主 Agent：效能负责人。
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import asyncio
 
 from deepagents.graph import create_deep_agent
 from langgraph.checkpoint.memory import InMemorySaver
@@ -17,6 +18,7 @@ from api.monitor import monitor
 from api.task_store import task_store
 from config.settings import get_settings
 from context.failure_steps import get_failure_steps, init_failure_steps, reset_failure_steps
+from context.retry_gate import init_retry_gate, reset_retry_gate
 from context.session import reset_all_tokens, setup_request_context
 from context.trace import (
     build_trace_document,
@@ -224,6 +226,7 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
 
     tokens = setup_request_context(session_dir_str, session_id)
     failure_token = init_failure_steps()
+    retry_token = init_retry_gate()
     # R2：与 failure 收集器成对初始化；finally 中 reset_trace
     trace_token = init_trace(thread_id=session_id, query=task_query)
     trace_event(kind="session", name="session_created", status="ok", message=session_dir_str)
@@ -287,6 +290,44 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
             )
             _log("agent_done", session_id=session_id)
 
+    except asyncio.CancelledError:
+        # R3：超时 wait_for 取消或客户端 cancel；finally 仍会 reset ContextVar
+        failed_steps = get_failure_steps()
+        cur = task_store.get(session_id) or {}
+        st = cur.get("status") or "cancelled"
+        if st in ("pending", "running"):
+            st = "cancelled"
+            try:
+                steps, trace_path = _persist_trace(
+                    status=st,
+                    failed_steps=failed_steps,
+                    session_dir=session_dir_str,
+                    session_id=session_id,
+                )
+            except Exception:
+                steps, trace_path = get_trace_steps(), None
+            task_store.mark_cancelled(
+                session_id,
+                error="任务已取消",
+                failed_steps=failed_steps or None,
+                steps=steps,
+                trace_path=trace_path,
+                session_dir=session_dir_str,
+            )
+            monitor.report_cancelled("任务已取消")
+        else:
+            # 外层可能已 mark_timeout；仍尽量落盘 Trace
+            try:
+                _persist_trace(
+                    status=st if st in ("timeout", "cancelled") else "cancelled",
+                    failed_steps=failed_steps,
+                    session_dir=session_dir_str,
+                    session_id=session_id,
+                )
+            except Exception:
+                pass
+        _log("agent_cancelled", session_id=session_id, status=st)
+        raise
     except Exception as e:
         log_error(_logger, "agent_error", str(e), session_id=session_id)
         failed_steps = get_failure_steps()
@@ -311,6 +352,7 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
         raise
     finally:
         reset_trace(trace_token)
+        reset_retry_gate(retry_token)
         reset_failure_steps(failure_token)
         reset_all_tokens(tokens)
         if _settings.runner_debug:

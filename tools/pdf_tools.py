@@ -10,8 +10,7 @@ from typing import Annotated, Optional
 from langchain_core.tools import tool
 
 from context.session import get_session_context
-from tools.hooks import hooks
-from tools.tool_result import format_tool_error, format_tool_ok
+from tools.tool_result import begin_tool, format_tool_error, format_tool_ok
 from utils.path_utils import resolve_path
 from utils.word_converter import convert_md_to_pdf_via_word
 
@@ -28,7 +27,9 @@ def convert_md_to_pdf(
         md_filename: 源 md 路径，相对 session 目录，如「reports/效能周报.md」
         pdf_filename: 可选；不传则与 md 同目录同名 .pdf
     """
-    hooks.report_tool("convert_md_to_pdf", {"md_filename": md_filename})
+    blocked = begin_tool("convert_md_to_pdf", {"md_filename": md_filename})
+    if blocked:
+        return blocked
 
     try:
         session_dir = get_session_context()

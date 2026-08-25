@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Literal, Optional
 
+from context.retry_gate import get_blocked_message, record_non_retryable
 from context.trace import trace_tool_end
 
 # 机器可读头标记；parse_tool_result / 模型 Prompt 均依赖此前缀
@@ -98,6 +99,9 @@ def format_tool_error(
         "retryable": retryable,
         "message": message,
     }
+    if not retryable:
+        # R1b：不可重试失败登记后，同工具再次调用走 begin_tool 短路
+        record_non_retryable(tool, message)
     trace_tool_end(
         tool=tool,
         ok=False,
@@ -113,6 +117,28 @@ def format_tool_error(
         else f"错误：{message}"
     )
     return f"{TOOL_RESULT_MARKER}{json.dumps(payload, ensure_ascii=False)}\n{human}"
+
+
+def begin_tool(tool: str, args: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """
+    工具入口统一埋点（R1b）。
+
+    - 先 hooks.report_tool → Trace start
+    - 若该工具已有 retryable=false 失败 → 直接返回短路错误串（不执行下游 I/O）
+    - 否则返回 None，调用方继续业务逻辑
+    """
+    from tools.hooks import hooks
+
+    prior = get_blocked_message(tool)
+    hooks.report_tool(tool, args)
+    if prior is None:
+        return None
+    return format_tool_error(
+        tool=tool,
+        message=f"short_circuited_retry: {prior}",
+        error_type="policy",
+        retryable=False,
+    )
 
 
 def parse_tool_result(text: str) -> Optional[Dict[str, Any]]:

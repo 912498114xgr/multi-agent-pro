@@ -11,8 +11,7 @@ from langchain_core.tools import tool
 from tavily import TavilyClient
 
 from config.settings import get_settings
-from tools.hooks import hooks
-from tools.tool_result import format_tool_error, format_tool_ok
+from tools.tool_result import begin_tool, format_tool_error, format_tool_ok
 
 
 @tool
@@ -31,9 +30,11 @@ def internet_search(
         max_results: 返回条数上限，默认 5 控制 token
         include_raw_content: 是否返回网页原文（更耗 token）
     """
-    hooks.report_tool("internet_search", {
+    blocked = begin_tool("internet_search", {
         "query": query, "topic": topic, "max_results": max_results,
     })
+    if blocked:
+        return blocked
     settings = get_settings()
     if not settings.tavily_api_key:
         return format_tool_error(

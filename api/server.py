@@ -17,12 +17,15 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from agent.mainagent.runner import run_deep_agent
-from api.monitor import manager
+from api.monitor import manager, monitor
 from api.task_store import task_store
 from config.settings import get_settings
 
 _settings = get_settings()
 app = FastAPI(title="EfficiencyAgent API")
+
+# R3：thread_id → 后台 asyncio.Task，供超时 wait_for 与 cancel API
+_running_tasks: dict[str, asyncio.Task] = {}
 
 app.add_middleware(
     CORSMiddleware,
@@ -77,12 +80,43 @@ async def startup_event() -> None:
 
 
 async def _run_task_background(query: str, thread_id: str) -> None:
-    """后台 Task 的入口：真正耗时的 Agent 在这里执行。"""
+    """后台 Task：wait_for 整任务超时；CancelledError 区分取消。"""
+    timeout_sec = float(_settings.task_timeout_sec)
     try:
-        await run_deep_agent(query, thread_id)
+        await asyncio.wait_for(run_deep_agent(query, thread_id), timeout=timeout_sec)
+    except asyncio.TimeoutError:
+        msg = f"任务超过 {int(timeout_sec)}s 未完成（task_timeout_sec）"
+        task = task_store.get(thread_id) or {}
+        task_store.mark_timeout(
+            thread_id,
+            error=msg,
+            session_dir=task.get("session_dir"),
+            steps=task.get("steps"),
+            trace_path=task.get("trace_path"),
+            failed_steps=task.get("failed_steps"),
+        )
+        monitor.report_timeout(msg)
+        print(f"[API] Task timeout: thread_id={thread_id}")
+    except asyncio.CancelledError:
+        task = task_store.get(thread_id) or {}
+        if task.get("status") in (None, "pending", "running", "cancelled"):
+            # runner 可能已 mark_cancelled；若仍 running 则补写
+            if task.get("status") != "cancelled":
+                task_store.mark_cancelled(
+                    thread_id,
+                    error="任务已取消",
+                    session_dir=task.get("session_dir"),
+                    steps=task.get("steps"),
+                    trace_path=task.get("trace_path"),
+                    failed_steps=task.get("failed_steps"),
+                )
+                monitor.report_cancelled("任务已取消")
+        print(f"[API] Task cancelled: thread_id={thread_id}")
     except Exception as exc:
-        # run_deep_agent 内部已经 mark_error；这里兜底，避免后台 Task 异常丢失得毫无痕迹。
+        # run_deep_agent 内部已经 mark_error；这里兜底
         print(f"[API] Background task failed: thread_id={thread_id}, error={exc}")
+    finally:
+        _running_tasks.pop(thread_id, None)
 
 
 def _schedule_agent_task(query: str, thread_id: str) -> None:
@@ -91,10 +125,11 @@ def _schedule_agent_task(query: str, thread_id: str) -> None:
 
     注意：这里不 await。HTTP 请求只负责“安排后台任务”，不等待 Agent 跑完。
     """
-    asyncio.create_task(
+    task = asyncio.create_task(
         _run_task_background(query, thread_id),
         name=f"agent-task-{thread_id}",
     )
+    _running_tasks[thread_id] = task
 
 
 def _start_task(request: TaskRequest) -> TaskResponse:
@@ -114,6 +149,24 @@ async def create_task(request: TaskRequest) -> TaskResponse:
 async def create_task_compat(request: TaskRequest) -> TaskResponse:
     """兼容 deep_search_pro 路径。"""
     return _start_task(request)
+
+
+@app.post("/api/tasks/{thread_id}/cancel", dependencies=[Depends(verify_api_key)])
+async def cancel_task(thread_id: str):
+    """R3：取消进行中的任务。"""
+    task = task_store.get(thread_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    status = task.get("status")
+    if status not in ("pending", "running"):
+        raise HTTPException(status_code=409, detail=f"任务已结束（status={status}），无法取消")
+    running = _running_tasks.get(thread_id)
+    if running and not running.done():
+        running.cancel()
+        return {"status": "cancelling", "thread_id": thread_id}
+    task_store.mark_cancelled(thread_id, error="任务已取消")
+    monitor.report_cancelled("任务已取消")
+    return {"status": "cancelled", "thread_id": thread_id}
 
 
 @app.get("/api/tasks/{thread_id}", dependencies=[Depends(verify_api_key)])

@@ -10,8 +10,7 @@ from typing import Annotated
 from langchain_core.tools import tool
 
 from context.session import get_session_context
-from tools.hooks import hooks
-from tools.tool_result import format_tool_error, format_tool_ok
+from tools.tool_result import begin_tool, format_tool_error, format_tool_ok
 from utils.path_utils import resolve_path
 
 ALLOWED_EXT = {".md", ".txt", ".docx", ".pdf", ".xlsx", ".xls"}
@@ -29,7 +28,9 @@ def read_file_content(
         filename: 只需传文件名如「Sprint12测试报告.md」，不要带目录前缀
         instruction: 预留参数，后续可做定向摘要（当前读取全文）
     """
-    hooks.report_tool("read_file_content", {"filename": filename, "instruction": instruction})
+    blocked = begin_tool("read_file_content", {"filename": filename, "instruction": instruction})
+    if blocked:
+        return blocked
 
     session_dir = get_session_context()
     file_path = Path(resolve_path(filename, session_dir))

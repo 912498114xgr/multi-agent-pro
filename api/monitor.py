@@ -149,6 +149,14 @@ class ToolMonitor:
             {"failed_steps": failed_steps or []},
         )
 
+    def report_timeout(self, message: str) -> None:
+        """R3：整任务超时。"""
+        self._emit("timeout", message, {"status": "timeout"})
+
+    def report_cancelled(self, message: str = "任务已取消") -> None:
+        """R3：任务取消。"""
+        self._emit("cancelled", message, {"status": "cancelled"})
+
 
 monitor = ToolMonitor()
 

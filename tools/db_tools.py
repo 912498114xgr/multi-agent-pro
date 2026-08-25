@@ -10,9 +10,8 @@ from langchain_core.tools import tool
 from mysql.connector import Error, connect
 
 from config.settings import get_settings
-from tools.hooks import hooks
 from tools.sql_validator import validate_readonly_sql, validate_table_name
-from tools.tool_result import format_tool_error, format_tool_ok
+from tools.tool_result import begin_tool, format_tool_error, format_tool_ok
 
 
 def _rows_to_csv(description, rows, suffix: str = "") -> str:
@@ -42,7 +41,9 @@ def list_sql_tables() -> str:
     列出 xiaoneng_db 中所有可用表。
     Agent 查数的第一步，用于了解有哪些 requirements/defects/iterations 等表。
     """
-    hooks.report_tool("list_sql_tables")
+    blocked = begin_tool("list_sql_tables")
+    if blocked:
+        return blocked
     settings = get_settings()
     config = settings.mysql_config()
     if not config.get("user"):
@@ -80,7 +81,9 @@ def get_table_data(table_name: str) -> str:
     预览指定表的前 100 行数据，用于了解列名和数据格式。
     表名经 validate_table_name 校验，SQL 使用反引号包裹防关键字冲突。
     """
-    hooks.report_tool("get_table_data", {"table_name": table_name})
+    blocked = begin_tool("get_table_data", {"table_name": table_name})
+    if blocked:
+        return blocked
     ok, err = validate_table_name(table_name)
     if not ok:
         return format_tool_error(
@@ -120,7 +123,9 @@ def execute_sql_query(query: str) -> str:
     执行自定义只读 SQL（SELECT/SHOW/DESCRIBE/EXPLAIN）。
     结果最多返回 100 行，防止 context 过长。
     """
-    hooks.report_tool("execute_sql_query", {"query": query})
+    blocked = begin_tool("execute_sql_query", {"query": query})
+    if blocked:
+        return blocked
     ok, err = validate_readonly_sql(query)
     if not ok:
         return format_tool_error(

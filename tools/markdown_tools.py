@@ -9,9 +9,9 @@ from typing import Annotated
 
 from langchain_core.tools import tool
 
+from context.failure_steps import get_failure_steps
 from context.session import get_session_context
-from tools.hooks import hooks
-from tools.tool_result import format_tool_error, format_tool_ok
+from tools.tool_result import begin_tool, format_tool_error, format_tool_ok
 from utils.path_utils import resolve_path
 
 
@@ -29,7 +29,18 @@ def generate_markdown(
         filename: 如「效能周报_2026W12」，自动补 .md 后缀
         path: 子目录，如「reports」→ 保存到 session_dir/reports/xxx.md
     """
-    hooks.report_tool("generate_markdown", {"filename": filename})
+    blocked = begin_tool("generate_markdown", {"filename": filename})
+    if blocked:
+        return blocked
+
+    # R1b 成稿门禁：已有 critical 失败则禁止写充实报告，避免「error + 假成稿」
+    if any(s.get("role") == "critical" for s in get_failure_steps()):
+        return format_tool_error(
+            tool="generate_markdown",
+            message="存在关键步骤失败，禁止生成充实报告（成稿门禁）",
+            error_type="policy",
+            retryable=False,
+        )
 
     if not filename.endswith(".md"):
         filename += ".md"

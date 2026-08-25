@@ -1,7 +1,7 @@
 """
 任务状态存储（MVP 内存实现）。
 
-状态流转：pending -> running -> done | partial_success | error
+状态流转：pending -> running -> done | partial_success | error | timeout | cancelled
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ class TaskStatus(str, Enum):
     DONE = "done"
     PARTIAL_SUCCESS = "partial_success"
     ERROR = "error"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
 
 
 class TaskStore:
@@ -128,6 +130,54 @@ class TaskStore:
             fields["trace_path"] = trace_path
         if session_dir is not None:
             fields["session_dir"] = session_dir
+        return self._update(thread_id, **fields)
+
+    def mark_timeout(
+        self,
+        thread_id: str,
+        error: str = "任务执行超时",
+        steps: Optional[List[Dict[str, Any]]] = None,
+        trace_path: Optional[str] = None,
+        session_dir: Optional[str] = None,
+        failed_steps: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """R3：整任务 asyncio.wait_for 超时。"""
+        fields: Dict[str, Any] = {
+            "status": TaskStatus.TIMEOUT.value,
+            "error": error,
+        }
+        if steps is not None:
+            fields["steps"] = list(steps)
+        if trace_path is not None:
+            fields["trace_path"] = trace_path
+        if session_dir is not None:
+            fields["session_dir"] = session_dir
+        if failed_steps is not None:
+            fields["failed_steps"] = list(failed_steps)
+        return self._update(thread_id, **fields)
+
+    def mark_cancelled(
+        self,
+        thread_id: str,
+        error: str = "任务已取消",
+        steps: Optional[List[Dict[str, Any]]] = None,
+        trace_path: Optional[str] = None,
+        session_dir: Optional[str] = None,
+        failed_steps: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """R3：客户端取消或 Task.cancel()。"""
+        fields: Dict[str, Any] = {
+            "status": TaskStatus.CANCELLED.value,
+            "error": error,
+        }
+        if steps is not None:
+            fields["steps"] = list(steps)
+        if trace_path is not None:
+            fields["trace_path"] = trace_path
+        if session_dir is not None:
+            fields["session_dir"] = session_dir
+        if failed_steps is not None:
+            fields["failed_steps"] = list(failed_steps)
         return self._update(thread_id, **fields)
 
     def set_session_dir(self, thread_id: str, session_dir: str) -> Optional[Dict[str, Any]]:

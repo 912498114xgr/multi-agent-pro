@@ -7,8 +7,7 @@ tools/ragflow_tools.py — 内部知识库工具（规范知识子 Agent 绑定�
 from langchain_core.tools import tool
 
 from config.settings import get_settings
-from tools.hooks import hooks
-from tools.tool_result import format_tool_error, format_tool_ok
+from tools.tool_result import begin_tool, format_tool_error, format_tool_ok
 
 
 @tool
@@ -17,7 +16,9 @@ def get_assistant_list() -> str:
     列出 RAGFlow 服务中可用的知识库助手及其关联数据集。
     规范知识子 Agent 的第一步：先知道有哪些助手可以提问。
     """
-    hooks.report_tool("get_assistant_list")
+    blocked = begin_tool("get_assistant_list")
+    if blocked:
+        return blocked
     settings = get_settings()
     if not settings.ragflow_api_url or not settings.ragflow_api_key:
         return format_tool_error(
@@ -61,7 +62,9 @@ def create_ask_delete(chat_name: str, question: str) -> str:
         chat_name: 助手名称，须与 get_assistant_list 返回的一致
         question: 向知识库提问的内容
     """
-    hooks.report_tool("create_ask_delete", {"chat_name": chat_name, "question": question})
+    blocked = begin_tool("create_ask_delete", {"chat_name": chat_name, "question": question})
+    if blocked:
+        return blocked
     settings = get_settings()
     if not settings.ragflow_api_url or not settings.ragflow_api_key:
         return format_tool_error(
