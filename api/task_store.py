@@ -35,6 +35,9 @@ class TaskStore:
             "error": None,
             "session_dir": None,
             "failed_steps": [],
+            # R2：完整步骤时间线与落盘路径（任务结束后由 runner 填充）
+            "steps": [],
+            "trace_path": None,
             "created_at": now,
             "updated_at": now,
         }
@@ -64,6 +67,8 @@ class TaskStore:
         thread_id: str,
         result: str,
         session_dir: Optional[str] = None,
+        steps: Optional[List[Dict[str, Any]]] = None,
+        trace_path: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         fields: Dict[str, Any] = {
             "status": TaskStatus.DONE.value,
@@ -73,6 +78,10 @@ class TaskStore:
         }
         if session_dir:
             fields["session_dir"] = session_dir
+        if steps is not None:
+            fields["steps"] = list(steps)
+        if trace_path is not None:
+            fields["trace_path"] = trace_path
         return self._update(thread_id, **fields)
 
     def mark_partial_success(
@@ -81,6 +90,8 @@ class TaskStore:
         result: str,
         failed_steps: List[Dict[str, Any]],
         session_dir: Optional[str] = None,
+        steps: Optional[List[Dict[str, Any]]] = None,
+        trace_path: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         fields: Dict[str, Any] = {
             "status": TaskStatus.PARTIAL_SUCCESS.value,
@@ -90,6 +101,10 @@ class TaskStore:
         }
         if session_dir:
             fields["session_dir"] = session_dir
+        if steps is not None:
+            fields["steps"] = list(steps)
+        if trace_path is not None:
+            fields["trace_path"] = trace_path
         return self._update(thread_id, **fields)
 
     def mark_error(
@@ -97,6 +112,9 @@ class TaskStore:
         thread_id: str,
         error: str,
         failed_steps: Optional[List[Dict[str, Any]]] = None,
+        steps: Optional[List[Dict[str, Any]]] = None,
+        trace_path: Optional[str] = None,
+        session_dir: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         fields: Dict[str, Any] = {
             "status": TaskStatus.ERROR.value,
@@ -104,10 +122,26 @@ class TaskStore:
         }
         if failed_steps is not None:
             fields["failed_steps"] = list(failed_steps)
+        if steps is not None:
+            fields["steps"] = list(steps)
+        if trace_path is not None:
+            fields["trace_path"] = trace_path
+        if session_dir is not None:
+            fields["session_dir"] = session_dir
         return self._update(thread_id, **fields)
 
     def set_session_dir(self, thread_id: str, session_dir: str) -> Optional[Dict[str, Any]]:
         return self._update(thread_id, session_dir=session_dir)
+
+    def set_trace(
+        self,
+        thread_id: str,
+        *,
+        steps: List[Dict[str, Any]],
+        trace_path: str,
+    ) -> Optional[Dict[str, Any]]:
+        """R2：单独更新 steps / trace_path（也可由 mark_* 一并写入）。"""
+        return self._update(thread_id, steps=list(steps), trace_path=trace_path)
 
 
 task_store = TaskStore()

@@ -11,7 +11,12 @@
 | 05 | [05-monitor-websocket.md](05-monitor-websocket.md) | `api/monitor.py` | 实时进度推送 |
 | 06 | [06-observability.md](06-observability.md) | `observability/logging.py` | JSON 结构化日志 |
 | 07 | [07-runner-改造.md](07-runner-改造.md) | `agent/mainagent/runner.py` | 串联所有新增能力 |
+| 08 | [08-trace.md](08-trace.md) | `context/trace.py` 等 | R2 步骤级 Trace 落盘与展示 |
 
 总览：[../Phase5-新增模块学习指南.md](Phase5-新增模块学习指南.md)
+
+**面试含金量两轮迭代（推荐）**：[../迭代学习索引.md](../迭代学习索引.md)
+- [R1 失败隔离](../迭代-R1-失败隔离学习指南.md)
+- [R2 步骤 Trace](../迭代-R2-步骤级Trace学习指南.md)
 
 **精读代码**：使用 `@learn-before-implement`（通用 Skill，默认方法级）；本仓库路径与分段见 [project-overlay.md](../../.cursor/skills/learn-before-implement/project-overlay.md)。

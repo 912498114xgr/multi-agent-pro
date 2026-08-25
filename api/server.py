@@ -124,6 +124,39 @@ async def get_task(thread_id: str):
     return task
 
 
+@app.get("/api/tasks/{thread_id}/trace", dependencies=[Depends(verify_api_key)])
+async def get_task_trace(thread_id: str):
+    """
+    R2：返回完整 Trace 文档，供前端「执行 Trace」面板与面试演示。
+
+    优先读 task.trace_path 指向的 trace.json；
+    文件不存在时回退为内存中的 steps / failed_steps 组装（进程未重启时尚可用）。
+    """
+    task = task_store.get(thread_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    trace_path = task.get("trace_path")
+    if trace_path:
+        path = Path(trace_path)
+        if path.is_file():
+            try:
+                from observability.trace_io import read_trace
+                return read_trace(path)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"读取 trace 失败: {exc}") from exc
+
+    return {
+        "thread_id": thread_id,
+        "query": task.get("query"),
+        "status": task.get("status"),
+        "session_dir": task.get("session_dir"),
+        "steps": task.get("steps") or [],
+        "failed_steps": task.get("failed_steps") or [],
+        "trace_path": trace_path,
+    }
+
+
 @app.post("/api/upload", dependencies=[Depends(verify_api_key)])
 async def upload_files(
     files: List[UploadFile] = File(...),

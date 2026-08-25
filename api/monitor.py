@@ -1,10 +1,11 @@
 """
 任务进度监控：CLI 打印 + WebSocket 推送。
 
-设计原则（日志降噪）：
-  - 进度事件面向用户，宁少勿滥
-  - 失败步骤合并为一条 failures_summary，不再逐条 step_failed
-  - 终态事件语义与 status 对齐，避免「执行完成」后再报错的观感
+设计原则（日志降噪 + R2）：
+  - 进度事件面向用户，宁少勿滥（不把每个 tool_exec 再推 WS）
+  - 失败步骤合并为一条 failures_summary
+  - 终态事件语义与 status 对齐
+  - ConnectionManager 保留每线程最近 N 条事件，WebSocket 重连时补发（replay）
 """
 
 from __future__ import annotations
@@ -33,7 +34,13 @@ class ToolMonitor:
         self.websocket_manager = manager
 
     def _emit(self, event_type: str, message: str, data: Optional[Dict[str, Any]] = None) -> None:
+        """构造 payload → 写入 ring buffer → 推 WS → 控制台一行。"""
         payload = self._build_payload(event_type, message, data)
+        if self.websocket_manager:
+            tid = payload.get("thread_id") or get_thread_context()
+            if tid:
+                # R2：先入缓冲，保证重连时能补发（即便当时无连接也能事后连上看到历史）
+                self.websocket_manager.record_event(str(tid), payload)
         self._send_payload_to_websocket(payload)
         print(f"\n[Monitor:{event_type}] {message}")
 
@@ -79,7 +86,7 @@ class ToolMonitor:
             asyncio.run_coroutine_threadsafe(send_coro, manager_loop)
 
     def report_tool(self, tool_name: str, args: Dict[str, Any] = None) -> None:
-        """主 Agent 规划调用工具时（来自 astream tool_calls）。"""
+        """主 Agent 规划调用工具时（来自 astream tool_calls，不是子 Agent 内部执行）。"""
         self._emit("tool_start", f"准备调用工具: {tool_name}", {"tool_name": tool_name, "args": args or {}})
 
     def report_assistant(self, assistant_name: str, args: Dict[str, Any] = None) -> None:
@@ -105,7 +112,6 @@ class ToolMonitor:
             return
         critical_n = sum(1 for s in failed_steps if s.get("role") == "critical")
         optional_n = len(failed_steps) - critical_n
-        # 按 tool 去重计数，摘要更短
         by_tool: Dict[str, int] = {}
         for s in failed_steps:
             name = str(s.get("tool") or "unknown")
@@ -127,6 +133,7 @@ class ToolMonitor:
         )
 
     def report_degraded(self, failed_steps: list, status: str) -> None:
+        """可选能力失败后的降级终态（通常 partial_success）。"""
         label = "部分成功" if status == "partial_success" else status
         self._emit(
             "degraded",
@@ -135,6 +142,7 @@ class ToolMonitor:
         )
 
     def report_error(self, message: str, failed_steps: Optional[List[Dict[str, Any]]] = None) -> None:
+        """关键失败或未捕获异常导致的任务 error。"""
         self._emit(
             "error",
             message,
@@ -146,21 +154,48 @@ monitor = ToolMonitor()
 
 
 class ConnectionManager:
-    """WebSocket 连接管理：按 thread_id 定向推送 monitor 事件。"""
+    """
+    WebSocket 连接管理：按 thread_id 定向推送。
+
+    R2 增强：
+        - 每线程 ring buffer（EVENT_BUFFER_SIZE）保存近期 monitor 事件
+        - connect 成功后按序补发，payload.replay=true，前端可忽略重复展示
+    """
+
+    EVENT_BUFFER_SIZE = 50
 
     def __init__(self) -> None:
         self.active_connections: Dict[str, WebSocket] = {}
         self.loop: Optional[asyncio.AbstractEventLoop] = None
+        # thread_id → 最近 N 条 monitor_event
+        self._event_buffers: Dict[str, List[Dict[str, Any]]] = {}
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
         monitor.set_websocket_manager(self)
         print(f"[Monitor] ConnectionManager bound to loop: {id(self.loop)}")
 
+    def record_event(self, thread_id: str, payload: Dict[str, Any]) -> None:
+        """写入该 thread 的事件缓冲（超出容量丢弃最旧）。"""
+        buf = self._event_buffers.setdefault(thread_id, [])
+        stored = dict(payload)
+        stored["replay"] = False
+        buf.append(stored)
+        if len(buf) > self.EVENT_BUFFER_SIZE:
+            del buf[: len(buf) - self.EVENT_BUFFER_SIZE]
+
     async def connect(self, websocket: WebSocket, thread_id: str) -> None:
         await websocket.accept()
         self.active_connections[thread_id] = websocket
         print(f"[Monitor] Client connected: {thread_id}")
+        # 重连补发：让前端尽快对齐进度（完整时间线仍以 Trace API 为准）
+        for event in list(self._event_buffers.get(thread_id, [])):
+            replay_payload = dict(event)
+            replay_payload["replay"] = True
+            try:
+                await websocket.send_json(replay_payload)
+            except Exception:
+                break
 
     def disconnect(self, websocket: WebSocket, thread_id: str) -> None:
         if self.active_connections.get(thread_id) is websocket:

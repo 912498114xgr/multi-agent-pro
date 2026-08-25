@@ -2,12 +2,12 @@
 EfficiencyAgent 主 Agent：效能负责人。
 
 - 组装 create_deep_agent + 5 个子 Agent
-- run_deep_agent：会话目录、ContextVar、astream 进度推送
+- run_deep_agent：会话目录、ContextVar、astream 进度推送、Trace 落盘（R2）
 """
 
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from deepagents.graph import create_deep_agent
 from langgraph.checkpoint.memory import InMemorySaver
@@ -18,8 +18,16 @@ from api.task_store import task_store
 from config.settings import get_settings
 from context.failure_steps import get_failure_steps, init_failure_steps, reset_failure_steps
 from context.session import reset_all_tokens, setup_request_context
+from context.trace import (
+    build_trace_document,
+    get_trace_steps,
+    init_trace,
+    reset_trace,
+    trace_event,
+)
 from llm.model import model
 from observability.logging import get_logger, log_error
+from observability.trace_io import write_trace
 from prompt.loader import get_main_agent_prompt
 from tools.tool_result import decide_task_status
 from tools.upload_file_read_tool import read_file_content
@@ -44,14 +52,12 @@ def _dbg(*args: Any) -> None:
 
 
 def _log(event: str, message: str = "", **extra: Any) -> None:
-    """结构化日志仅 debug 模式写入，避免与 [Monitor:xxx] 控制台格式混杂。"""
     if _settings.runner_debug:
         from observability.logging import log_info
         log_info(_logger, event, message, **extra)
 
 
 def _prepare_session(session_id: str) -> tuple[Path, str, str, str, list[str]]:
-    """创建 output 目录，复制上传文件，返回路径信息。"""
     session_dir = _settings.output_dir / f"session_{session_id}"
     session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -101,9 +107,7 @@ def _tool_call_args(tool_call: Any) -> dict:
     return getattr(tool_call, "args", None) or {}
 
 
-
 def _extract_latest_message(node_name: str, state: Any) -> Any | None:
-    """LangGraph 每个 chunk 里有节点状态；我们只关心最新一条 message。"""
     _dbg(f"node_name: {node_name}")
     _dbg(f"state: {state}")
     if not state or "messages" not in state:
@@ -120,15 +124,37 @@ def _extract_latest_message(node_name: str, state: Any) -> Any | None:
     return latest_message
 
 
-async def _consume_agent_stream(input_messages: dict[str, Any], config: dict[str, Any]) -> str | None:
+def _persist_trace(
+    *,
+    status: str,
+    failed_steps: List[Dict[str, Any]],
+    session_dir: str,
+    session_id: str,
+) -> tuple[List[Dict[str, Any]], Optional[str]]:
     """
-    流式执行主 Agent，并把关键分支转成 monitor 进度事件。
+    R2：任务终态确定后，固化本轮 Trace。
 
-    读这段时抓住 3 个分支：
-      1. model + tool_calls：模型准备调用子 Agent 或工具
-      2. model + content：模型产出最终答案
-      3. tools：工具返回结果，默认只在 debug 模式打印
+    1. 追加 kind=status 步骤（done / partial_success / error）
+    2. build_trace_document 组装完整文档
+    3. write_trace → output/session_*/trace.json
+    4. task_store.set_trace 写入 steps + trace_path，供 GET /api/tasks 与前端面板
+
+    Returns:
+        (steps 列表, trace 文件绝对路径)
     """
+    trace_event(kind="status", name=status, status=status)
+    doc = build_trace_document(
+        status=status,
+        failed_steps=failed_steps,
+        session_dir=session_dir,
+    )
+    path = write_trace(session_dir, doc)
+    steps = list(doc.get("steps") or get_trace_steps())
+    task_store.set_trace(session_id, steps=steps, trace_path=path)
+    return steps, path
+
+
+async def _consume_agent_stream(input_messages: dict[str, Any], config: dict[str, Any]) -> str | None:
     final_result: str | None = None
 
     async for chunk in main_agent.astream(input_messages, config=config):
@@ -148,13 +174,16 @@ async def _consume_agent_stream(input_messages: dict[str, Any], config: dict[str
                         name = _tool_call_name(tool_call)
                         args = _tool_call_args(tool_call)
                         _dbg(f"tool_call_name: {name}", f"tool_call_args: {args}")
-                        # 子agent
                         if name == "task":
-                            monitor.report_assistant(
-                                args.get("subagent_type", ""),
-                                {"description": args.get("description", "")},
+                            # DeepAgents 委派子 Agent：记入 Trace + 推 WS 进度
+                            assistant_name = args.get("subagent_type", "")
+                            trace_event(
+                                kind="assistant",
+                                name=assistant_name or "subagent",
+                                status="ok",
+                                message=str(args.get("description", ""))[:200],
                             )
-                        # 工具
+                            monitor.report_assistant(assistant_name, {"description": args.get("description", "")})
                         elif name:
                             monitor.report_tool(name, args)
 
@@ -163,6 +192,13 @@ async def _consume_agent_stream(input_messages: dict[str, Any], config: dict[str
                     if _settings.runner_debug:
                         preview = final_result[:100]
                         print(f"主智能体执行结果，最终结果：{preview}")
+                    # 模型正文 ≠ 任务终态；Trace 记 model_result，终态在 decide 之后
+                    trace_event(
+                        kind="model_result",
+                        name="main_agent",
+                        status="ok",
+                        message=final_result[:200],
+                    )
                     monitor.report_task_result(final_result)
 
             elif node_name == "tools":
@@ -175,13 +211,6 @@ async def _consume_agent_stream(input_messages: dict[str, Any], config: dict[str
 
 
 async def run_deep_agent(task_query: str, session_id: str) -> None:
-    """
-    异步执行主 Agent。
-
-    Args:
-        task_query: 用户自然语言任务
-        session_id: 会话 / thread_id，用于 checkpoint 与目录隔离
-    """
     _log("agent_start", task_query[:120], session_id=session_id)
     if _settings.runner_debug:
         print(f"当前会话的main_agent开始执行了！ 会话id:{session_id}")
@@ -195,6 +224,9 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
 
     tokens = setup_request_context(session_dir_str, session_id)
     failure_token = init_failure_steps()
+    # R2：与 failure 收集器成对初始化；finally 中 reset_trace
+    trace_token = init_trace(thread_id=session_id, query=task_query)
+    trace_event(kind="session", name="session_created", status="ok", message=session_dir_str)
     monitor.report_session_dir(session_dir_str)
 
     config = {"configurable": {"thread_id": session_id}}
@@ -212,14 +244,26 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
             monitor.report_failures_summary(failed_steps)
 
         status = decide_task_status(failed_steps)
+        steps, trace_path = _persist_trace(
+            status=status,
+            failed_steps=failed_steps,
+            session_dir=session_dir_str,
+            session_id=session_id,
+        )
+
         if status == "error":
-            # 关键工具已失败：即使模型仍产出文本，也不标 done，避免「状态 done、内容幻觉」
             err_msg = "; ".join(
                 f"{s.get('tool')}: {s.get('message')}" for s in failed_steps if s.get("role") == "critical"
             ) or "critical tool failed"
-            # 摘要已含明细；error 文案缩短，避免与 failures_summary 重复整段拼接
             short = f"关键步骤失败（{sum(1 for s in failed_steps if s.get('role') == 'critical')} 项），任务终止"
-            task_store.mark_error(session_id, err_msg, failed_steps=failed_steps)
+            task_store.mark_error(
+                session_id,
+                err_msg,
+                failed_steps=failed_steps,
+                steps=steps,
+                trace_path=trace_path,
+                session_dir=session_dir_str,
+            )
             monitor.report_error(short, failed_steps=failed_steps)
             _log("agent_error_critical_tools", err_msg, session_id=session_id)
         elif status == "partial_success":
@@ -228,20 +272,45 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
                 result_text,
                 failed_steps=failed_steps,
                 session_dir=session_dir_str,
+                steps=steps,
+                trace_path=trace_path,
             )
             monitor.report_degraded(failed_steps, status="partial_success")
             _log("agent_partial_success", session_id=session_id, failed=len(failed_steps))
         else:
-            task_store.mark_done(session_id, result_text, session_dir_str)
+            task_store.mark_done(
+                session_id,
+                result_text,
+                session_dir_str,
+                steps=steps,
+                trace_path=trace_path,
+            )
             _log("agent_done", session_id=session_id)
 
     except Exception as e:
         log_error(_logger, "agent_error", str(e), session_id=session_id)
         failed_steps = get_failure_steps()
-        task_store.mark_error(session_id, str(e), failed_steps=failed_steps or None)
+        try:
+            steps, trace_path = _persist_trace(
+                status="error",
+                failed_steps=failed_steps,
+                session_dir=session_dir_str,
+                session_id=session_id,
+            )
+        except Exception:
+            steps, trace_path = get_trace_steps(), None
+        task_store.mark_error(
+            session_id,
+            str(e),
+            failed_steps=failed_steps or None,
+            steps=steps,
+            trace_path=trace_path,
+            session_dir=session_dir_str,
+        )
         monitor.report_error(f"执行主 Agent 异常: {e}", failed_steps=failed_steps)
         raise
     finally:
+        reset_trace(trace_token)
         reset_failure_steps(failure_token)
         reset_all_tokens(tokens)
         if _settings.runner_debug:
