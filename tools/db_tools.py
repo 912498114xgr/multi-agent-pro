@@ -1,17 +1,7 @@
 """
 tools/db_tools.py — 数据库查询工具（数据查询子 Agent 绑定）
 
-连接 xiaoneng_db，提供三个 LangChain Tool：
-  list_sql_tables    — 列出所有表
-  get_table_data     — 预览单表前 100 行
-  execute_sql_query  — 执行自定义只读 SQL
-
-企业级特性：
-  - 配置来自 config.settings，不直接 os.getenv
-  - execute_sql_query 经 sql_validator 只读校验
-  - get_table_data 表名白名单校验
-  - 每次查询打印 SQL 审计日志（耗时、结果大小）
-  - 异常返回字符串而非抛错，避免打断 Agent 流程
+异常/校验失败经 format_tool_error 结构化返回，并记入失败收集器（critical）。
 """
 
 import time
@@ -22,23 +12,19 @@ from mysql.connector import Error, connect
 from config.settings import get_settings
 from tools.hooks import hooks
 from tools.sql_validator import validate_readonly_sql, validate_table_name
+from tools.tool_result import format_tool_error, format_tool_ok
 
 
 def _rows_to_csv(description, rows, suffix: str = "") -> str:
-    """
-    将 cursor 查询结果转为 CSV 风格字符串，便于 LLM 阅读。
-    第一行表头，后续每行一条记录，逗号分隔。
-    """
     columns = [desc[0] for desc in description]
     header = ",".join(columns)
     body = "\n".join(",".join(map(str, row)) for row in rows)
     return f"{header}\n{body}{suffix}"
 
 
-def _audit(tool: str, query: str, ms: float, size: int, ok: bool) -> None:
-    """SQL 审计日志，后续可改为结构化 JSON 写入 observability。"""
+def _audit(tool_name: str, query: str, ms: float, size: int, ok: bool) -> None:
     status = "ok" if ok else "fail"
-    print(f"[SQL Audit] tool={tool} ms={ms:.1f} size={size} status={status} query={query[:120]}")
+    print(f"[SQL Audit] tool={tool_name} ms={ms:.1f} size={size} status={status} query={query[:120]}")
 
 
 @tool
@@ -51,7 +37,11 @@ def list_sql_tables() -> str:
     settings = get_settings()
     config = settings.mysql_config()
     if not config.get("user"):
-        return "错误：数据库未配置，请检查 .env 中 MYSQL_* 项"
+        return format_tool_error(
+            tool="list_sql_tables",
+            message="数据库未配置，请检查 .env 中 MYSQL_* 项",
+            error_type="config_missing",
+        )
 
     start = time.perf_counter()
     try:
@@ -60,14 +50,19 @@ def list_sql_tables() -> str:
                 cursor.execute("SHOW TABLES")
                 tables = cursor.fetchall()
                 if not tables:
-                    return "没有可用的表"
+                    return format_tool_ok(tool="list_sql_tables", body="没有可用的表")
                 names = [t[0] for t in tables]
                 result = f"可用的表有：{', '.join(names)}"
                 _audit("list_sql_tables", "SHOW TABLES", (time.perf_counter() - start) * 1000, len(result), True)
-                return result
+                return format_tool_ok(tool="list_sql_tables", body=result)
     except Error as e:
         _audit("list_sql_tables", "SHOW TABLES", (time.perf_counter() - start) * 1000, 0, False)
-        return f"查询出现异常：{str(e)}"
+        return format_tool_error(
+            tool="list_sql_tables",
+            message=f"查询出现异常：{e}",
+            error_type="upstream",
+            retryable=True,
+        )
 
 
 @tool
@@ -79,7 +74,11 @@ def get_table_data(table_name: str) -> str:
     hooks.report_tool("get_table_data", {"table_name": table_name})
     ok, err = validate_table_name(table_name)
     if not ok:
-        return f"错误：{err}"
+        return format_tool_error(
+            tool="get_table_data",
+            message=err,
+            error_type="validation",
+        )
 
     settings = get_settings()
     config = settings.mysql_config()
@@ -91,14 +90,19 @@ def get_table_data(table_name: str) -> str:
                 cursor.execute(sql)
                 description = cursor.description
                 if not description:
-                    return f"数据表 {table_name} 为空"
+                    return format_tool_ok(tool="get_table_data", body=f"数据表 {table_name} 为空")
                 rows = cursor.fetchall()
                 result = _rows_to_csv(description, rows)
                 _audit("get_table_data", sql, (time.perf_counter() - start) * 1000, len(result), True)
-                return result
+                return format_tool_ok(tool="get_table_data", body=result)
     except Error as e:
         _audit("get_table_data", sql, (time.perf_counter() - start) * 1000, 0, False)
-        return f"查询出现异常：{str(e)}"
+        return format_tool_error(
+            tool="get_table_data",
+            message=f"查询出现异常：{e}",
+            error_type="upstream",
+            retryable=True,
+        )
 
 
 @tool
@@ -110,7 +114,11 @@ def execute_sql_query(query: str) -> str:
     hooks.report_tool("execute_sql_query", {"query": query})
     ok, err = validate_readonly_sql(query)
     if not ok:
-        return f"错误：{err}"
+        return format_tool_error(
+            tool="execute_sql_query",
+            message=err,
+            error_type="validation",
+        )
 
     settings = get_settings()
     config = settings.mysql_config()
@@ -121,11 +129,16 @@ def execute_sql_query(query: str) -> str:
                 cursor.execute(query)
                 description = cursor.description
                 if not description:
-                    return f"执行 SQL 无结果：{query}"
+                    return format_tool_ok(tool="execute_sql_query", body=f"执行 SQL 无结果：{query}")
                 rows = cursor.fetchall()[:100]
                 result = _rows_to_csv(description, rows, "\n(结果已截断至100行)")
                 _audit("execute_sql_query", query, (time.perf_counter() - start) * 1000, len(result), True)
-                return result
+                return format_tool_ok(tool="execute_sql_query", body=result)
     except Error as e:
         _audit("execute_sql_query", query, (time.perf_counter() - start) * 1000, 0, False)
-        return f"查询出现异常：{str(e)}"
+        return format_tool_error(
+            tool="execute_sql_query",
+            message=f"查询出现异常：{e}",
+            error_type="upstream",
+            retryable=True,
+        )

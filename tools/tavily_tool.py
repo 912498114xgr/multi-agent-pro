@@ -1,8 +1,7 @@
 """
 tools/tavily_tool.py — 公网搜索工具（行业检索子 Agent 绑定）
 
-通过 Tavily API 检索研发效能方法论、DORA 指标、行业 benchmark 等公开信息。
-不用于查询 xiaoneng_db 或 RAGFlow 内部知识库。
+失败为 optional：不拖垮整单，由任务层记 partial_success。
 """
 
 import time
@@ -13,6 +12,7 @@ from tavily import TavilyClient
 
 from config.settings import get_settings
 from tools.hooks import hooks
+from tools.tool_result import format_tool_error, format_tool_ok
 
 
 @tool
@@ -36,7 +36,11 @@ def internet_search(
     })
     settings = get_settings()
     if not settings.tavily_api_key:
-        return "错误：TAVILY_API_KEY 未配置"
+        return format_tool_error(
+            tool="internet_search",
+            message="TAVILY_API_KEY 未配置",
+            error_type="config_missing",
+        )
 
     start = time.perf_counter()
     try:
@@ -48,6 +52,11 @@ def internet_search(
             include_raw_content=include_raw_content,
         )
         print(f"[Tavily] ms={(time.perf_counter()-start)*1000:.0f} query={query[:80]}")
-        return str(result)
+        return format_tool_ok(tool="internet_search", body=str(result))
     except Exception as e:
-        return f"网络搜索失败：{str(e)}"
+        return format_tool_error(
+            tool="internet_search",
+            message=f"网络搜索失败：{e}",
+            error_type="upstream",
+            retryable=True,
+        )

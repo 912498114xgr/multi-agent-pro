@@ -1,8 +1,7 @@
 """
 tools/pdf_tools.py — Markdown 转 PDF（报告撰写子 Agent 绑定）
 
-将已生成的 .md 报告转为 PDF，底层调用 utils.word_converter（Windows Word COM）。
-需先由 generate_markdown 生成源文件，再调用本工具。
+PDF 为 optional：失败可降级，仍保留 Markdown。
 """
 
 from pathlib import Path
@@ -12,6 +11,7 @@ from langchain_core.tools import tool
 
 from context.session import get_session_context
 from tools.hooks import hooks
+from tools.tool_result import format_tool_error, format_tool_ok
 from utils.path_utils import resolve_path
 from utils.word_converter import convert_md_to_pdf_via_word
 
@@ -34,13 +34,29 @@ def convert_md_to_pdf(
         session_dir = get_session_context()
         md_abs = Path(resolve_path(str(Path(md_filename).with_suffix(".md")), session_dir))
         if not md_abs.exists():
-            return f"错误：文件不存在 {md_abs}"
+            return format_tool_error(
+                tool="convert_md_to_pdf",
+                message=f"文件不存在 {md_abs}",
+                error_type="not_found",
+            )
 
         if pdf_filename:
             pdf_abs = Path(resolve_path(str(Path(pdf_filename).with_suffix(".pdf")), session_dir))
         else:
             pdf_abs = md_abs.with_suffix(".pdf")
 
-        return convert_md_to_pdf_via_word(md_abs, pdf_abs)
+        body = convert_md_to_pdf_via_word(md_abs, pdf_abs)
+        # word_converter 失败时可能返回错误文案；简单探测
+        if isinstance(body, str) and ("失败" in body or "错误" in body):
+            return format_tool_error(
+                tool="convert_md_to_pdf",
+                message=body,
+                error_type="upstream",
+            )
+        return format_tool_ok(tool="convert_md_to_pdf", body=str(body))
     except Exception as e:
-        return f"转换失败: {str(e)}"
+        return format_tool_error(
+            tool="convert_md_to_pdf",
+            message=f"转换失败: {e}",
+            error_type="upstream",
+        )

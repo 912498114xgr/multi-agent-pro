@@ -1,7 +1,7 @@
 """
-内存任务状态存储（MVP）。
+任务状态存储（MVP 内存实现）。
 
-状态流转：pending -> running -> done | error
+状态流转：pending -> running -> done | partial_success | error
 """
 
 from __future__ import annotations
@@ -9,13 +9,14 @@ from __future__ import annotations
 import datetime
 import threading
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 class TaskStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     DONE = "done"
+    PARTIAL_SUCCESS = "partial_success"
     ERROR = "error"
 
 
@@ -33,6 +34,7 @@ class TaskStore:
             "result": None,
             "error": None,
             "session_dir": None,
+            "failed_steps": [],
             "created_at": now,
             "updated_at": now,
         }
@@ -57,14 +59,52 @@ class TaskStore:
     def mark_running(self, thread_id: str) -> Optional[Dict[str, Any]]:
         return self._update(thread_id, status=TaskStatus.RUNNING.value)
 
-    def mark_done(self, thread_id: str, result: str, session_dir: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        fields: Dict[str, Any] = {"status": TaskStatus.DONE.value, "result": result, "error": None}
+    def mark_done(
+        self,
+        thread_id: str,
+        result: str,
+        session_dir: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        fields: Dict[str, Any] = {
+            "status": TaskStatus.DONE.value,
+            "result": result,
+            "error": None,
+            "failed_steps": [],
+        }
         if session_dir:
             fields["session_dir"] = session_dir
         return self._update(thread_id, **fields)
 
-    def mark_error(self, thread_id: str, error: str) -> Optional[Dict[str, Any]]:
-        return self._update(thread_id, status=TaskStatus.ERROR.value, error=error)
+    def mark_partial_success(
+        self,
+        thread_id: str,
+        result: str,
+        failed_steps: List[Dict[str, Any]],
+        session_dir: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        fields: Dict[str, Any] = {
+            "status": TaskStatus.PARTIAL_SUCCESS.value,
+            "result": result,
+            "error": None,
+            "failed_steps": list(failed_steps),
+        }
+        if session_dir:
+            fields["session_dir"] = session_dir
+        return self._update(thread_id, **fields)
+
+    def mark_error(
+        self,
+        thread_id: str,
+        error: str,
+        failed_steps: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        fields: Dict[str, Any] = {
+            "status": TaskStatus.ERROR.value,
+            "error": error,
+        }
+        if failed_steps is not None:
+            fields["failed_steps"] = list(failed_steps)
+        return self._update(thread_id, **fields)
 
     def set_session_dir(self, thread_id: str, session_dir: str) -> Optional[Dict[str, Any]]:
         return self._update(thread_id, session_dir=session_dir)

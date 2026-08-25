@@ -89,6 +89,23 @@ class ToolMonitor:
     def report_session_dir(self, path: str) -> None:
         self._emit("session_created", f"工作目录已创建: {path}", {"path": path})
 
+    def report_step_failed(self, step: Dict[str, Any]) -> None:
+        tool = step.get("tool", "unknown")
+        role = step.get("role", "optional")
+        message = step.get("message", "")
+        self._emit(
+            "step_failed",
+            f"步骤失败({role}): {tool} — {message}",
+            {"step": step},
+        )
+
+    def report_degraded(self, failed_steps: list, status: str) -> None:
+        self._emit(
+            "degraded",
+            f"任务降级完成: status={status}, failed={len(failed_steps)}",
+            {"status": status, "failed_steps": failed_steps},
+        )
+
 
 monitor = ToolMonitor()
 

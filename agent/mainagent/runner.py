@@ -16,10 +16,12 @@ from agent.subagent import ALL_SUBAGENTS
 from api.monitor import monitor
 from api.task_store import task_store
 from config.settings import get_settings
+from context.failure_steps import get_failure_steps, init_failure_steps, reset_failure_steps
 from context.session import reset_all_tokens, setup_request_context
 from llm.model import model
 from observability.logging import get_logger, log_error
 from prompt.loader import get_main_agent_prompt
+from tools.tool_result import decide_task_status
 from tools.upload_file_read_tool import read_file_content
 
 _main_cfg = get_main_agent_prompt()
@@ -190,6 +192,7 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
     task_store.set_session_dir(session_id, session_dir_str)
 
     tokens = setup_request_context(session_dir_str, session_id)
+    failure_token = init_failure_steps()
     monitor.report_session_dir(session_dir_str)
 
     config = {"configurable": {"thread_id": session_id}}
@@ -201,19 +204,41 @@ async def run_deep_agent(task_query: str, session_id: str) -> None:
 
     try:
         final_result = await _consume_agent_stream(input_messages, config)
+        result_text = final_result if final_result is not None else ""
+        failed_steps = get_failure_steps()
+        for step in failed_steps:
+            monitor.report_step_failed(step)
 
-        if final_result is not None:
-            task_store.mark_done(session_id, final_result, session_dir_str)
-            _log("agent_done", session_id=session_id)
+        status = decide_task_status(failed_steps)
+        if status == "error":
+            # 关键工具已失败：即使模型仍产出文本，也不标 done，避免「状态 done、内容幻觉」
+            err_msg = "; ".join(
+                f"{s.get('tool')}: {s.get('message')}" for s in failed_steps if s.get("role") == "critical"
+            ) or "critical tool failed"
+            task_store.mark_error(session_id, err_msg, failed_steps=failed_steps)
+            monitor.report_degraded(failed_steps, status="error")
+            monitor._emit("error", f"关键步骤失败: {err_msg}")
+            _log("agent_error_critical_tools", err_msg, session_id=session_id)
+        elif status == "partial_success":
+            task_store.mark_partial_success(
+                session_id,
+                result_text,
+                failed_steps=failed_steps,
+                session_dir=session_dir_str,
+            )
+            monitor.report_degraded(failed_steps, status="partial_success")
+            _log("agent_partial_success", session_id=session_id, failed=len(failed_steps))
         else:
-            task_store.mark_done(session_id, "", session_dir_str)
-            _log("agent_done_no_content", session_id=session_id)
+            task_store.mark_done(session_id, result_text, session_dir_str)
+            _log("agent_done", session_id=session_id)
 
     except Exception as e:
         log_error(_logger, "agent_error", str(e), session_id=session_id)
-        task_store.mark_error(session_id, str(e))
+        failed_steps = get_failure_steps()
+        task_store.mark_error(session_id, str(e), failed_steps=failed_steps or None)
         monitor._emit("error", f"执行主 Agent 异常: {str(e)}")
         raise
     finally:
+        reset_failure_steps(failure_token)
         reset_all_tokens(tokens)
         print(f"[Runner] 结束 session_id={session_id}")
