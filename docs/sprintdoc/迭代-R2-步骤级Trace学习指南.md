@@ -1,9 +1,9 @@
 # 迭代 R2：步骤级状态与可展示 Trace
 
 > **学习目标**：看完本文能讲清——Trace 记什么、为何 ContextVar、和 WS 进度有何分工、面试时打开哪份文件。  
-> **关联需求**：[面试含金量优化需求文档.md](./面试含金量优化需求文档.md) 中的 **R2**  
-> **模块速查**：[modules/08-trace.md](./modules/08-trace.md)  
-> **前置**：建议先读 [迭代-R1-失败隔离学习指南.md](./迭代-R1-失败隔离学习指南.md)
+> **关联需求**：[面试含金量优化需求文档.md](面试含金量优化需求文档.md) 中的 **R2**  
+> **模块速查**：[modules/08-trace.md](../modules/08-trace.md)  
+> **前置**：建议先读 [迭代-R1-失败隔离学习指南.md](迭代-R1-失败隔离学习指南.md)
 
 ---
 
@@ -67,21 +67,21 @@ Ring buffer（50 条）在重连时 `replay: true` 推历史进度——补的�
 
 | 文件 | 作用 |
 |------|------|
-| [`context/trace.py`](../context/trace.py) | `init_trace` / `trace_tool_start|end` / `trace_event` / `build_trace_document` |
-| [`observability/trace_io.py`](../observability/trace_io.py) | `write_trace` / `read_trace` → `session/trace.json` |
-| [`docs/modules/08-trace.md`](./modules/08-trace.md) | 模块用途速查 |
-| [`tests/test_trace.py`](../tests/test_trace.py)、`test_trace_io.py` | 起止耗时、落盘、store 字段 |
+| [`context/trace.py`](../../context/trace.py) | `init_trace` / `trace_tool_start|end` / `trace_event` / `build_trace_document` |
+| [`observability/trace_io.py`](../../observability/trace_io.py) | `write_trace` / `read_trace` → `session/trace.json` |
+| [`docs/modules/08-trace.md`](../modules/08-trace.md) | 模块用途速查 |
+| [`tests/test_trace.py`](../../tests/test_trace.py)、`test_trace_io.py` | 起止耗时、落盘、store 字段 |
 
 ### 4.2 改造文件
 
 | 文件 | 改了什么 |
 |------|----------|
-| [`tools/hooks.py`](../tools/hooks.py) | `report_tool` → `trace_tool_start`（默认仍不 print） |
-| [`tools/tool_result.py`](../tools/tool_result.py) | `format_ok/error` → `trace_tool_end`；失败仍 `record_failure` |
-| [`agent/mainagent/runner.py`](../agent/mainagent/runner.py) | `init_trace`；`assistant`/`model_result`/`session`/`status` 事件；`_persist_trace` 落盘 |
-| [`api/task_store.py`](../api/task_store.py) | 字段 `steps`、`trace_path`；`set_trace` / `mark_*` 可带 steps |
-| [`api/server.py`](../api/server.py) | `GET /api/tasks/{id}/trace` |
-| [`api/monitor.py`](../api/monitor.py) | 事件 ring buffer + connect 补发 |
+| [`tools/hooks.py`](../../tools/hooks.py) | `report_tool` → `trace_tool_start`（默认仍不 print） |
+| [`tools/tool_result.py`](../../tools/tool_result.py) | `format_ok/error` → `trace_tool_end`；失败仍 `record_failure` |
+| [`agent/mainagent/runner.py`](../../agent/mainagent/runner.py) | `init_trace`；`assistant`/`model_result`/`session`/`status` 事件；`_persist_trace` 落盘 |
+| [`api/task_store.py`](../../api/task_store.py) | 字段 `steps`、`trace_path`；`set_trace` / `mark_*` 可带 steps |
+| [`api/server.py`](../../api/server.py) | `GET /api/tasks/{id}/trace` |
+| [`api/monitor.py`](../../api/monitor.py) | 事件 ring buffer + connect 补发 |
 | 前端 `client.js` / `App.vue` | `getTaskTrace`；右侧「链路 Trace」按钮 + 侧拉栏时间线 |
 
 ### 4.3 Trace 文档长什么样
@@ -182,8 +182,8 @@ python -m unittest discover -s tests -v
 ## 8. 推荐阅读顺序
 
 1. 本文第 2～3 节  
-2. [`docs/modules/08-trace.md`](./modules/08-trace.md)（文件表）  
-3. [`context/trace.py`](../context/trace.py) 文件头注释（最全）  
+2. [`docs/modules/08-trace.md`](../modules/08-trace.md)（文件表）  
+3. [`context/trace.py`](../../context/trace.py) 文件头注释（最全）  
 4. `hooks.report_tool` ↔ `format_tool_*` 的 start/end 配对  
 5. `runner._persist_trace`  
 6. 前端 `loadTraceForTask` + 侧拉栏  
