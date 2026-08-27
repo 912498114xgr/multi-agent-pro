@@ -103,7 +103,12 @@ cp .env.example .env
 .\.venv\Scripts\python.exe agent\test_run.py "查 Sprint-12 开放缺陷"
 
 # 4. 启动 API 服务
-uvicorn api.server:app --reload --host 0.0.0.0 --port 8000
+# Windows + Postgres checkpointer（推荐）:
+python run_api.py
+# 或显式指定 Selector loop:
+# uvicorn api.server:app --host 0.0.0.0 --port 8000 --loop api.loop_factory:selector_loop
+# Linux/macOS 也可:
+# uvicorn api.server:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### Web 前端（MVP）

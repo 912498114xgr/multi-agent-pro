@@ -6,9 +6,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional
+
+# Windows + psycopg 异步：ProactorEventLoop 不兼容，需 Selector
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import uvicorn
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
@@ -16,13 +22,43 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from agent.mainagent.runner import run_deep_agent
+from agent.checkpointer import checkpoint_exists, close_checkpointer, init_checkpointer
+from agent.mainagent.runner import get_main_agent, run_deep_agent
 from api.monitor import manager, monitor
 from api.task_store import task_store
 from config.settings import get_settings
 
 _settings = get_settings()
-app = FastAPI(title="EfficiencyAgent API")
+
+
+class _SuppressTaskPollAccessLog(logging.Filter):
+    """前端轮询 GET /api/tasks/{id} 频率高，默认不打 access，避免刷屏。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        if "GET /api/tasks/" in msg and "HTTP" in msg:
+            if " 200 " in msg or " 404 " in msg:
+                return False
+        return True
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    loop = asyncio.get_running_loop()
+    manager.set_loop(loop)
+    logging.getLogger("uvicorn.access").addFilter(_SuppressTaskPollAccessLog())
+    await init_checkpointer()
+    await get_main_agent()
+    yield
+    await close_checkpointer()
+    if hasattr(task_store, "close"):
+        task_store.close()
+
+
+app = FastAPI(title="EfficiencyAgent API", lifespan=lifespan)
 
 # R3：thread_id → 后台 asyncio.Task，供超时 wait_for 与 cancel API
 _running_tasks: dict[str, asyncio.Task] = {}
@@ -41,21 +77,6 @@ upload_root = _settings.upload_dir
 upload_root.mkdir(parents=True, exist_ok=True)
 
 
-class _SuppressTaskPollAccessLog(logging.Filter):
-    """前端轮询 GET /api/tasks/{id} 频率高，默认不打 access，避免刷屏。"""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            msg = record.getMessage()
-        except Exception:
-            return True
-        if "GET /api/tasks/" in msg and "HTTP" in msg:
-            # 保留明显错误码；2xx/404 探针与轮询静音
-            if " 200 " in msg or " 404 " in msg:
-                return False
-        return True
-
-
 def verify_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")) -> None:
     expected = _settings.api_key
     if expected and x_api_key != expected:
@@ -70,13 +91,6 @@ class TaskRequest(BaseModel):
 class TaskResponse(BaseModel):
     status: str
     thread_id: str
-
-
-@app.on_event("startup")
-async def startup_event() -> None:
-    loop = asyncio.get_running_loop()
-    manager.set_loop(loop)
-    logging.getLogger("uvicorn.access").addFilter(_SuppressTaskPollAccessLog())
 
 
 async def _run_task_background(query: str, thread_id: str) -> None:
@@ -119,6 +133,31 @@ async def _run_task_background(query: str, thread_id: str) -> None:
         _running_tasks.pop(thread_id, None)
 
 
+
+async def _task_resumable(task: dict) -> bool:
+    status = task.get("status")
+    if status not in ("error", "timeout", "cancelled"):
+        return False
+    return await checkpoint_exists(task.get("thread_id", ""))
+
+
+async def _enrich_task(task: dict) -> dict:
+    out = dict(task)
+    out["resumable"] = await _task_resumable(out)
+    return out
+
+
+async def _task_summary(task: dict) -> dict:
+    return {
+        "thread_id": task.get("thread_id"),
+        "query": task.get("query"),
+        "status": task.get("status"),
+        "created_at": task.get("created_at"),
+        "updated_at": task.get("updated_at"),
+        "resumable": await _task_resumable(task),
+    }
+
+
 def _schedule_agent_task(query: str, thread_id: str) -> None:
     """
     把 Agent 协程登记到当前 FastAPI event loop。
@@ -135,7 +174,11 @@ def _schedule_agent_task(query: str, thread_id: str) -> None:
 def _start_task(request: TaskRequest) -> TaskResponse:
     """创建任务记录，并安排后台 Agent 执行。"""
     thread_id = request.thread_id or str(uuid.uuid4())
-    task_store.create(thread_id, request.query)
+    existing = task_store.get(thread_id)
+    if existing and existing.get("status") in ("pending", "running"):
+        raise HTTPException(status_code=409, detail="任务进行中，请勿重复提交")
+    if not existing:
+        task_store.create(thread_id, request.query)
     _schedule_agent_task(request.query, thread_id)
     return TaskResponse(status="started", thread_id=thread_id)
 
@@ -169,12 +212,41 @@ async def cancel_task(thread_id: str):
     return {"status": "cancelled", "thread_id": thread_id}
 
 
+@app.post("/api/tasks/{thread_id}/resume", dependencies=[Depends(verify_api_key)])
+async def resume_task(thread_id: str):
+    """R6：同 thread_id 依赖 checkpoint 续跑（turn 边界，非 tool 中途）。"""
+    task = task_store.get(thread_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    status = task.get("status")
+    if status in ("pending", "running"):
+        raise HTTPException(status_code=409, detail="任务仍在执行中，无法恢复")
+    if status in ("done", "partial_success"):
+        raise HTTPException(status_code=409, detail="任务已完成，无需恢复")
+    if not await checkpoint_exists(thread_id):
+        raise HTTPException(status_code=409, detail="无图 checkpoint，请新建任务")
+    query = task.get("query") or ""
+    task_store.mark_running(thread_id)
+    _schedule_agent_task(query, thread_id)
+    return {"status": "resumed", "thread_id": thread_id}
+
+
+@app.get("/api/tasks", dependencies=[Depends(verify_api_key)])
+async def list_tasks(limit: int = 50, offset: int = 0):
+    """R6：会话列表 — 持久化任务按更新时间倒序。"""
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    tasks = task_store.list_tasks(limit=limit, offset=offset)
+    summaries = [await _task_summary(t) for t in tasks]
+    return {"tasks": summaries, "limit": limit, "offset": offset}
+
+
 @app.get("/api/tasks/{thread_id}", dependencies=[Depends(verify_api_key)])
 async def get_task(thread_id: str):
     task = task_store.get(thread_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return task
+    return await _enrich_task(task)
 
 
 @app.get("/api/tasks/{thread_id}/trace", dependencies=[Depends(verify_api_key)])
@@ -301,4 +373,11 @@ async def health():
 
 
 if __name__ == "__main__":
-    uvicorn.run("api.server:app", host="0.0.0.0", port=8000, reload=True)
+    # Windows：uvicorn 默认 Proactor，必须指定 Selector loop（见 api/loop_factory.py）
+    uvicorn.run(
+        "api.server:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=sys.platform != "win32",
+        loop="api.loop_factory:selector_loop",
+    )

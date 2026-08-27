@@ -71,6 +71,21 @@ class Settings(BaseSettings):
     task_timeout_sec: int = 600         # 单任务最长执行秒数
     prompt_version: str = "v1"          # Prompt 版本号，写入 loader 元数据
 
+    # ---------- R6/R6b 持久化（PostgreSQL）----------
+    agent_database_url: str = ""
+    task_store_backend: str = "postgres"  # postgres | memory（单测）
+    checkpointer_backend: str = "postgres"  # postgres | memory（单测）
+
+    def require_agent_database_url(self) -> str:
+        """R6b：postgres backend 时必须配置 AGENT_DATABASE_URL。"""
+        url = (self.agent_database_url or "").strip()
+        if not url:
+            raise ValueError(
+                "AGENT_DATABASE_URL 未配置。请设置 .env 或 docker compose up -d postgres "
+                "（示例：postgresql://agent:agent@localhost:5432/agent_db）"
+            )
+        return url
+
     # ---------- 路径（相对项目根）----------
     project_root: Path = Path(__file__).resolve().parents[1]
     output_dir_name: str = "output"     # Agent 生成的报告存放处

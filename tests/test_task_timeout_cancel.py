@@ -30,7 +30,19 @@ class TaskStoreTimeoutCancelTests(unittest.TestCase):
 
 class WaitForTimeoutTests(unittest.IsolatedAsyncioTestCase):
     async def test_wait_for_marks_timeout(self) -> None:
-        from api import server
+        import importlib
+        import os
+
+        os.environ["TASK_STORE_BACKEND"] = "memory"
+        os.environ["CHECKPOINTER_BACKEND"] = "memory"
+        from config.settings import get_settings
+
+        get_settings.cache_clear()
+        import api.task_store as ts_mod
+        import api.server as server
+
+        importlib.reload(ts_mod)
+        importlib.reload(server)
 
         tid = "timeout-demo"
         server.task_store.create(tid, "q")
@@ -50,7 +62,19 @@ class WaitForTimeoutTests(unittest.IsolatedAsyncioTestCase):
 
 class CancelApiLogicTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_running_task(self) -> None:
-        from api import server
+        import importlib
+        import os
+
+        os.environ["TASK_STORE_BACKEND"] = "memory"
+        os.environ["CHECKPOINTER_BACKEND"] = "memory"
+        from config.settings import get_settings
+
+        get_settings.cache_clear()
+        import api.task_store as ts_mod
+        import api.server as server
+
+        importlib.reload(ts_mod)
+        importlib.reload(server)
 
         tid = "cancel-demo"
         server.task_store.create(tid, "q")

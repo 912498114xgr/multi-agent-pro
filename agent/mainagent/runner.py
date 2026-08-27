@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional
 import asyncio
 
 from deepagents.graph import create_deep_agent
-from langgraph.checkpoint.memory import InMemorySaver
 
+from agent.checkpointer import get_checkpointer
 from agent.subagent import ALL_SUBAGENTS
 from api.monitor import monitor
 from api.task_store import task_store
@@ -39,13 +39,27 @@ _settings = get_settings()
 _project_root = _settings.project_root
 _logger = get_logger("runner")
 
-main_agent = create_deep_agent(
-    model=model,
-    system_prompt=_main_cfg["system_prompt"],
-    tools=[read_file_content],
-    checkpointer=InMemorySaver(),
-    subagents=ALL_SUBAGENTS,
-)
+_main_agent = None
+
+
+async def get_main_agent():
+    """R6b：checkpointer 在 lifespan 初始化后再编译 Agent。"""
+    global _main_agent
+    if _main_agent is None:
+        _main_agent = create_deep_agent(
+            model=model,
+            system_prompt=_main_cfg["system_prompt"],
+            tools=[read_file_content],
+            checkpointer=get_checkpointer(),
+            subagents=ALL_SUBAGENTS,
+        )
+    return _main_agent
+
+
+def reset_main_agent_for_tests() -> None:
+    """单测重置已编译 Agent。"""
+    global _main_agent
+    _main_agent = None
 
 
 def _dbg(*args: Any) -> None:
@@ -158,8 +172,9 @@ def _persist_trace(
 
 async def _consume_agent_stream(input_messages: dict[str, Any], config: dict[str, Any]) -> str | None:
     final_result: str | None = None
+    agent = await get_main_agent()
 
-    async for chunk in main_agent.astream(input_messages, config=config):
+    async for chunk in agent.astream(input_messages, config=config):
         _dbg(f"chunk: {chunk}")
 
         for node_name, state in chunk.items():

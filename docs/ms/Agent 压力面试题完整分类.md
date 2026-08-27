@@ -17,10 +17,10 @@
 
 > 任务暂停恢复、重启丢失、幂等、多实例、子 Agent 并行
 
-1. 任务暂停 / 恢复怎么做？❌无人工暂停；TaskStore 内存；设计用 checkpointer + turn 边界恢复 R6
-2. 进程重启任务还在吗？❌内存 TaskStore，重启丢失；升级 SQLite/RedisR6
-3. 连点两次发送会怎样？⚠️新 thread_id 或同会话再跑；无严格幂等锁，承认并发控制弱幂等 / 锁
-4. 多实例下 ContextVar 够吗？✅/⚠️单进程协程够用；多实例要外置状态 + 分布式 trace 架构口述
+1. 任务暂停 / 恢复怎么做？⚠️无专用 pause 状态；**R6**：SqliteSaver + `thread_id`，`POST .../resume` 在 turn 边界续跑；非 tool 中途暂停
+2. 进程重启任务还在吗？✅ **R6**：TaskStore Postgres，`GET` 元数据仍在；running 的 asyncio Task 不自动续，需 resume 或新建
+3. 连点两次发送会怎样？✅ **R6**：同 `thread_id` 且 pending/running → **409**；前端 loading + 明确错误文案
+4. 多实例下 ContextVar 够吗？✅/⚠️单进程协程够用；多实例要外置 TaskStore/checkpointer + sticky；**R6 仅 Postgres 单进程，Redis 口述**
 5. 多个子 Agent 能否并行？共享文件系统会不会互相覆盖？
 
 ## 三、可观测性｜Trace｜WS｜Monitor｜OpenTelemetry｜成本 SLA
